@@ -11,7 +11,7 @@ import { useEstudos } from "../../estado/estudos";
 import { useOrganizacao } from "../../estado/organizacao";
 import { useComunicacao } from "../../estado/comunicacao";
 import { useAgentes } from "../../estado/agentes";
-import { useConfig } from "../../estado/configuracoes";
+import { useConfig, type SecaoHoje } from "../../estado/configuracoes";
 import { useInterface } from "../../estado/interface";
 import { useIlha } from "../../estado/ilha";
 import { Marca, MARCAS, marcaDoApp } from "../../marcas/Marca";
@@ -21,11 +21,12 @@ import { deISO, formatarData, hojeISO, paraISO, horarioRelativo } from "../../ut
 import { itensDoCalendario } from "../../utilitarios/itensDoCalendario";
 import { ConexaoNaIlha } from "./ConexaoNaIlha";
 import { EspacoDoPersonagem } from "./animacoes/PersonagemContinuo";
-import { funcaoLigada } from "../../utilitarios/funcoes";
+import { funcaoLigada, secoesDoHojeLigadas } from "../../utilitarios/funcoes";
 import { useFinancas } from "../../estado/financas";
 import { interpretarQuando } from "../../utilitarios/linguagem";
 import { capturar, tiposDeCapturaLigados, type TipoCaptura } from "../../utilitarios/captura";
-import { confirmarComando } from "../../utilitarios/comandos";
+import { confirmarComando, faltaCategoria, tipoDeCategoriaDoCartao } from "../../utilitarios/comandos";
+import { SeletorDeCategoria } from "../../componentes/SeletorDeCategoria";
 import { formatarDinheiro } from "../../utilitarios/dinheiro";
 import { tocarSom } from "../../ponte/sons";
 import { addMonths, eachDayOfInterval, endOfMonth, endOfWeek, isSameMonth, startOfMonth, startOfWeek } from "date-fns";
@@ -49,6 +50,55 @@ function Marcador({ marcado, aoMudar, rotulo }: { marcado: boolean; aoMudar: () 
 }
 
 export function VisaoHoje() {
+  const desligadas = useConfig((s) => s.funcoesDesligadas);
+  const secoes = secoesDoHojeLigadas(desligadas);
+  const escolhida = useIlha((s) => s.secaoHoje);
+  const definirSecao = useIlha((s) => s.definirSecaoHoje);
+  const secao = secoes.includes(escolhida) ? escolhida : secoes[0];
+  const tarefas = useRotina((s) => s.tarefas);
+  const habitos = useRotina((s) => s.habitos);
+  const registros = useRotina((s) => s.registros);
+  const hoje = hojeISO();
+  const doDia = tarefasDoDia(tarefas, hoje).filter((t) => t.status !== "cancelada");
+  const habitosAtivos = habitos.filter((h) => !h.arquivado);
+  const contagem: Record<SecaoHoje, { feitos: number; total: number } | null> = {
+    agenda: null,
+    tarefas: { feitos: doDia.filter((t) => t.status === "concluida").length, total: doDia.length },
+    habitos: { feitos: habitosAtivos.filter((h) => habitoCumprido(h, registros[hoje]?.[h.id])).length, total: habitosAtivos.length },
+  };
+  const atual = secao ? contagem[secao] : null;
+  const tudoFeito = Boolean(atual && atual.total > 0 && atual.feitos === atual.total);
+
+  return (
+    <Cartao veu={tudoFeito ? "#34d399" : undefined}>
+      <div className="ilha-chips" role="tablist" aria-label={T.ilha.abas.hoje}>
+        {secoes.map((s) => {
+          const c = contagem[s];
+          return (
+            <button
+              key={s}
+              type="button"
+              role="tab"
+              className="ilha-chip"
+              aria-pressed={s === secao}
+              aria-selected={s === secao}
+              onClick={() => {
+                if (s !== secao) void tocarSom("blip");
+                definirSecao(s);
+              }}
+            >
+              {T.ilha.secoesHoje[s]}
+              {c && c.total > 0 && <span className="ilha-chip-numero numero">{T.ilha.feitosDoTotal(c.feitos, c.total)}</span>}
+            </button>
+          );
+        })}
+      </div>
+      {secao === "agenda" ? <SecaoAgenda /> : secao === "tarefas" ? <SecaoTarefas /> : secao === "habitos" ? <SecaoHabitos /> : null}
+    </Cartao>
+  );
+}
+
+function SecaoTarefas() {
   const tarefas = useRotina((s) => s.tarefas);
   const criar = useRotina((s) => s.criarTarefa);
   const mudarStatus = useRotina((s) => s.mudarStatus);
@@ -56,7 +106,6 @@ export function VisaoHoje() {
   const [erro, setErro] = useState("");
   const hoje = hojeISO();
   const lista = tarefasDoDia(tarefas, hoje).filter((t) => t.status !== "cancelada");
-  const feitas = lista.filter((t) => t.status === "concluida").length;
 
   const adicionar = () => {
     const limpo = texto.trim();
@@ -72,11 +121,7 @@ export function VisaoHoje() {
   };
 
   return (
-    <Cartao veu={feitas === lista.length && lista.length > 0 ? "#34d399" : undefined}>
-      <div className="linha-entre">
-        <span className="ilha-titulo">{T.ilha.abas.hoje}</span>
-        {lista.length > 0 && <span className="ilha-mini numero">{T.ilha.hojeContagem(feitas, lista.length)}</span>}
-      </div>
+    <div className="ilha-hoje-secao">
       <div className="ilha-rolagem">
         {lista.length === 0 ? (
           <span className="ilha-sub">{T.ilha.semTarefasHoje}</span>
@@ -117,7 +162,7 @@ export function VisaoHoje() {
           <CornerDownLeft size={13} />
         </button>
       </div>
-    </Cartao>
+    </div>
   );
 }
 
@@ -176,6 +221,7 @@ export function VisaoCaptura() {
       {confirmacao ? (
         <ConfirmacaoIlha
           confirmacao={confirmacao}
+          aoMudar={(dados) => setConfirmacao({ ...confirmacao, dados: { ...confirmacao.dados, ...dados } })}
           aoFim={(texto) => {
             setConfirmacao(null);
             if (texto) {
@@ -212,8 +258,10 @@ export function VisaoCaptura() {
   );
 }
 
-function ConfirmacaoIlha({ confirmacao, aoFim }: { confirmacao: CartaoConfirmacao; aoFim: (texto?: string) => void }) {
+function ConfirmacaoIlha({ confirmacao, aoMudar, aoFim }: { confirmacao: CartaoConfirmacao; aoMudar: (dados: CartaoConfirmacao["dados"]) => void; aoFim: (texto?: string) => void }) {
   const d = confirmacao.dados;
+  const tipoCategoria = tipoDeCategoriaDoCartao(confirmacao);
+  const semCategoria = faltaCategoria(confirmacao);
   return (
     <div className="coluna" style={{ gap: 8 }}>
       <div className="ilha-confirmacao">
@@ -221,8 +269,20 @@ function ConfirmacaoIlha({ confirmacao, aoFim }: { confirmacao: CartaoConfirmaca
         <span>{T.chat.rotulos.descricao}: <b>{String(d.descricao)}</b></span>
         {Array.isArray(d.pessoas) && <span>{T.chat.rotulos.pessoas}: <b>{d.pessoas.join(", ")}</b></span>}
       </div>
+      {tipoCategoria && (
+        <div className="permissao-categoria" data-falta={semCategoria || undefined}>
+          {semCategoria && T.financas.categoriaObrigatoria}
+          <SeletorDeCategoria
+            tipo={tipoCategoria}
+            categoriaId={String(d.categoriaId ?? "")}
+            novaCategoria={String(d.novaCategoria ?? "")}
+            invalido={semCategoria}
+            aoMudar={(categoriaId, novaCategoria) => aoMudar({ categoriaId, novaCategoria })}
+          />
+        </div>
+      )}
       <div className="linha">
-        <button type="button" className="ilha-botao ilha-botao-primario" onClick={() => void Promise.resolve(confirmarComando(confirmacao)).then((texto) => aoFim(texto))}>
+        <button type="button" className="ilha-botao ilha-botao-primario" disabled={semCategoria} onClick={() => void Promise.resolve(confirmarComando(confirmacao)).then((texto) => aoFim(texto))}>
           {T.chat.confirmar}
         </button>
         <button type="button" className="ilha-botao" onClick={() => aoFim()}>
@@ -389,19 +449,14 @@ export function VisaoFoco() {
   );
 }
 
-export function VisaoHabitos() {
+function SecaoHabitos() {
   const habitos = useRotina((s) => s.habitos).filter((h) => !h.arquivado);
   const registros = useRotina((s) => s.registros);
   const registrar = useRotina((s) => s.registrarHabito);
   const hoje = hojeISO();
-  const feitos = habitos.filter((h) => habitoCumprido(h, registros[hoje]?.[h.id])).length;
 
   return (
-    <Cartao veu={feitos === habitos.length && habitos.length > 0 ? "#34d399" : undefined}>
-      <div className="linha-entre">
-        <span className="ilha-titulo">{T.ilha.abas.habitos}</span>
-        {habitos.length > 0 && <span className="ilha-mini numero">{T.ilha.habitosContagem(feitos, habitos.length)}</span>}
-      </div>
+    <div className="ilha-hoje-secao">
       <div className="ilha-rolagem">
         {habitos.length === 0 ? (
           <span className="ilha-sub">{T.ilha.semHabitos}</span>
@@ -450,7 +505,7 @@ export function VisaoHabitos() {
           })
         )}
       </div>
-    </Cartao>
+    </div>
   );
 }
 
@@ -538,7 +593,7 @@ export function VisaoConexoes() {
     </Cartao>
   );
 }
-export function VisaoCalendario() {
+function SecaoAgenda() {
   const eventos = useOrganizacao((s) => s.eventos);
   const metas = useOrganizacao((s) => s.metas);
   const tarefas = useRotina((s) => s.tarefas);
@@ -571,69 +626,68 @@ export function VisaoCalendario() {
   };
 
   return (
-    <Cartao>
-      <div className="ilha-calendario-corpo">
-        <div className="ilha-calendario-relogio">
-          <span className="ilha-calendario-hora numero">{formatarData(agora, "HH:mm")}</span>
-          <span className="ilha-calendario-data">{formatarData(agora, "EEEE, d 'de' MMMM")}</span>
-          <div className="ilha-calendario-hoje">
-            {deHoje.length === 0 ? (
-              <span className="ilha-sub">{C.semNadaHoje}</span>
-            ) : (
-              <>
-                {deHoje.slice(0, 3).map((item) => (
-                  <button key={item.id} type="button" className="ilha-calendario-item" onClick={() => abrirDia(hoje)}>
-                    <span className="ilha-calendario-item-hora numero">{item.hora ?? C.diaTodo}</span>
-                    <span className="cortar privado">{item.titulo}</span>
-                  </button>
-                ))}
-                {deHoje.length > 3 && <span className="ilha-mini">{C.maisHoje(deHoje.length - 3)}</span>}
-              </>
-            )}
-          </div>
-        </div>
-        <div className="ilha-calendario-mes-bloco">
-          <div className="linha-entre">
-            <span className="ilha-titulo ilha-calendario-mes">{formatarData(mes, "MMMM 'de' yyyy")}</span>
-            <div className="linha" style={{ gap: 2 }}>
-              {!isSameMonth(mes, deISO(hoje)) && (
-                <button type="button" className="ilha-botao-texto" onClick={() => setMes(startOfMonth(deISO(hoje)))}>{C.hoje}</button>
-              )}
-              <button type="button" className="ilha-acao" aria-label={C.anterior} title={C.anterior} onClick={() => setMes((m) => addMonths(m, -1))}><ChevronLeft size={14} /></button>
-              <button type="button" className="ilha-acao" aria-label={C.proximo} title={C.proximo} onClick={() => setMes((m) => addMonths(m, 1))}><ChevronRight size={14} /></button>
-            </div>
-          </div>
-          <div className="ilha-calendario" role="grid" aria-label={formatarData(mes, "MMMM 'de' yyyy")}>
-            {dias.slice(0, 7).map((d) => (
-              <span key={`s-${d.getDay()}`} className="ilha-calendario-semana" aria-hidden="true">{formatarData(d, "EEEEE")}</span>
-            ))}
-            {dias.map((d) => {
-              const iso = paraISO(d);
-              const marcado = comCompromisso.has(iso);
-              const rotulo = formatarData(d, "d 'de' MMMM");
-              return (
-                <button
-                  key={iso}
-                  type="button"
-                  role="gridcell"
-                  className="ilha-calendario-dia numero"
-                  data-hoje={iso === hoje || undefined}
-                  data-fora={!isSameMonth(d, mes) || undefined}
-                  aria-label={marcado ? C.diaComCompromisso(rotulo) : C.abrirDia(rotulo)}
-                  title={marcado ? C.diaComCompromisso(rotulo) : C.abrirDia(rotulo)}
-                  onClick={() => abrirDia(iso)}
-                >
-                  {d.getDate()}
-                  {marcado && <span className="ilha-calendario-ponto" aria-hidden="true" />}
+    <div className="ilha-calendario-corpo">
+      <div className="ilha-calendario-relogio">
+        <span className="ilha-calendario-hora numero">{formatarData(agora, "HH:mm")}</span>
+        <span className="ilha-calendario-data">{formatarData(agora, "EEEE, d 'de' MMMM")}</span>
+        <div className="ilha-calendario-hoje">
+          {deHoje.length === 0 ? (
+            <span className="ilha-sub">{C.semNadaHoje}</span>
+          ) : (
+            <>
+              {deHoje.slice(0, 3).map((item) => (
+                <button key={item.id} type="button" className="ilha-calendario-item" onClick={() => abrirDia(hoje)}>
+                  <span className="ilha-calendario-item-hora numero">{item.hora ?? C.diaTodo}</span>
+                  <span className="cortar privado">{item.titulo}</span>
                 </button>
-              );
-            })}
-          </div>
+              ))}
+              {deHoje.length > 3 && <span className="ilha-mini">{C.maisHoje(deHoje.length - 3)}</span>}
+            </>
+          )}
         </div>
       </div>
-    </Cartao>
+      <div className="ilha-calendario-mes-bloco">
+        <div className="linha-entre">
+          <span className="ilha-titulo ilha-calendario-mes">{formatarData(mes, "MMMM 'de' yyyy")}</span>
+          <div className="linha" style={{ gap: 2 }}>
+            {!isSameMonth(mes, deISO(hoje)) && (
+              <button type="button" className="ilha-botao-texto" onClick={() => setMes(startOfMonth(deISO(hoje)))}>{C.hoje}</button>
+            )}
+            <button type="button" className="ilha-acao" aria-label={C.anterior} title={C.anterior} onClick={() => setMes((m) => addMonths(m, -1))}><ChevronLeft size={14} /></button>
+            <button type="button" className="ilha-acao" aria-label={C.proximo} title={C.proximo} onClick={() => setMes((m) => addMonths(m, 1))}><ChevronRight size={14} /></button>
+          </div>
+        </div>
+        <div className="ilha-calendario" role="grid" aria-label={formatarData(mes, "MMMM 'de' yyyy")}>
+          {dias.slice(0, 7).map((d) => (
+            <span key={`s-${d.getDay()}`} className="ilha-calendario-semana" aria-hidden="true">{formatarData(d, "EEEEE")}</span>
+          ))}
+          {dias.map((d) => {
+            const iso = paraISO(d);
+            const marcado = comCompromisso.has(iso);
+            const rotulo = formatarData(d, "d 'de' MMMM");
+            return (
+              <button
+                key={iso}
+                type="button"
+                role="gridcell"
+                className="ilha-calendario-dia numero"
+                data-hoje={iso === hoje || undefined}
+                data-fora={!isSameMonth(d, mes) || undefined}
+                aria-label={marcado ? C.diaComCompromisso(rotulo) : C.abrirDia(rotulo)}
+                title={marcado ? C.diaComCompromisso(rotulo) : C.abrirDia(rotulo)}
+                onClick={() => abrirDia(iso)}
+              >
+                {d.getDate()}
+                {marcado && <span className="ilha-calendario-ponto" aria-hidden="true" />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
+
 export function VisaoAvisos() {
   const alertas = useAgentes((s) => s.alertas);
   const resolver = useAgentes((s) => s.resolverAlerta);

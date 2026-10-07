@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  ListTodo, Zap, Music, Timer, Repeat, CalendarDays, MessageCircle, Plug, Bell, Volume2, VolumeX, AppWindow, ChevronUp, Check, CircleAlert, Download, SquareTerminal, ShieldAlert, LoaderCircle,
+  Plus, Music, Timer, CalendarDays, MessageCircle, Plug, Bell, Volume2, VolumeX, AppWindow, ChevronUp, Check, CircleAlert, Download, CodeXml, ShieldAlert, LoaderCircle,
   type LucideIcon,
 } from "lucide-react";
-import { useConfig, type AbaIlha } from "../../estado/configuracoes";
+import { useConfig, type AbaIlha, type SecaoHoje, type VisaoIlha } from "../../estado/configuracoes";
 import { useIlha } from "../../estado/ilha";
 import { useInterface } from "../../estado/interface";
 import { useAgentes, AGENTES, estadoDoAgente, alertaFresco } from "../../estado/agentes";
@@ -16,62 +16,68 @@ import { Anel } from "../../componentes/Graficos";
 import { T } from "../../textos/textos";
 import { tocarSom } from "../../ponte/sons";
 import {
-  VisaoHoje, VisaoCaptura, VisaoMidia, VisaoFoco, VisaoHabitos, VisaoConexoes, VisaoCalendario, VisaoAvisos,
+  VisaoHoje, VisaoCaptura, VisaoMidia, VisaoFoco, VisaoConexoes, VisaoAvisos,
 } from "./Visoes";
 import { alguemCobre } from "../geometria";
 import { VisaoChat } from "./VisaoChat";
 import { VisaoClaude } from "./claude/VisaoClaude";
 import { usarClaudeCode, devolverPendentesAoTerminal } from "./claude/usarClaudeCode";
+import { MARCA_DA_FERRAMENTA, nomeDaFerramenta } from "./claude/ferramentas";
 import { abaLigada } from "../../utilitarios/funcoes";
-import { useClaudeCode, sessaoAtiva } from "../../estado/claudeCode";
+import { tiposDeCapturaLigados } from "../../utilitarios/captura";
+import { useClaudeCode, sessaoAtiva, nomeDoModelo } from "../../estado/claudeCode";
 import { useAtualizacao } from "../../estado/atualizacao";
-import { NATIVO, usarAreaInterativa, usarCursorFora, usarEstadoDaFrente } from "../../desktop/desktop";
+import { NATIVO, ouvirEvento, usarAreaInterativa, usarCursorFora, usarEstadoDaFrente } from "../../desktop/desktop";
+import { Saudacao } from "./animacoes/Saudacao";
+import { usarSaudacaoDiaria } from "./animacoes/usarSaudacaoDiaria";
+import { ALTURA_DA_SAUDACAO, EVENTO_DA_SAUDACAO, LARGURA_DA_SAUDACAO } from "./animacoes/pedirSaudacao";
 import { BarraDoTopo, ALTURA_DA_FAIXA } from "./barra/BarraDoTopo";
-import { alternarAbaDaBarra } from "./barra/acoesDaBarra";
+import { abaVizinha, alternarAbaDaBarra } from "./barra/acoesDaBarra";
 import { EspacoDoPersonagem, PersonagemContinuo } from "./animacoes/PersonagemContinuo";
 import { EtapaDeTrabalho, EtapasAnimadas } from "./animacoes/EtapasAnimadas";
-import { usarAparenciaDeBorda, variaveisDaBorda } from "../aparencia";
+import { atributosDoFundo, usarAparenciaDeBorda, variaveisDaBorda } from "../aparencia";
 import type { AgenteId, EstadoAgente } from "../../tipos";
 import "./ilha.css";
 
 const ICONE_ABA: Record<AbaIlha, LucideIcon> = {
-  hoje: ListTodo,
-  captura: Zap,
+  hoje: CalendarDays,
   midia: Music,
   foco: Timer,
-  habitos: Repeat,
- chat: MessageCircle,
+  chat: MessageCircle,
   conexoes: Plug,
-  calendario: CalendarDays,
   avisos: Bell,
-  claude: SquareTerminal,
+  claude: CodeXml,
 };
 
-const VISAO_ABA: Record<AbaIlha, () => React.JSX.Element> = {
+const VISAO_ABA: Record<VisaoIlha, () => React.JSX.Element | null> = {
   hoje: VisaoHoje,
   captura: VisaoCaptura,
   midia: VisaoMidia,
   foco: VisaoFoco,
-  habitos: VisaoHabitos,
- chat: VisaoChat,
+  chat: VisaoChat,
   conexoes: VisaoConexoes,
-  calendario: VisaoCalendario,
   avisos: VisaoAvisos,
   claude: VisaoClaude,
 };
 
-const ALTURA_ABA: Record<AbaIlha, number> = {
-  hoje: 250,
+const ALTURA_ABA: Record<Exclude<VisaoIlha, "hoje">, number> = {
   captura: 168,
   midia: 184,
   foco: 176,
-  habitos: 230,
- chat: 300,
+  chat: 300,
   conexoes: 350,
-  calendario: 286,
   avisos: 178,
-  claude: 336,
+  claude: 296,
 };
+
+const ALTURA_DO_HOJE: Record<SecaoHoje, number> = { agenda: 318, tarefas: 258, habitos: 238 };
+
+function alturaDaVisao(visao: VisaoIlha, secaoHoje: SecaoHoje) {
+  return visao === "hoje" ? ALTURA_DO_HOJE[secaoHoje] : ALTURA_ABA[visao];
+}
+
+// Abas mais largas que o padrão: a de IAs é larga e baixa, com o uso de cada ferramenta numa faixa.
+const LARGURA_ABA: Partial<Record<VisaoIlha, number>> = { claude: 820 };
 
 const ESCALA = { pequena: 0.85, media: 1, grande: 1.15 };
 
@@ -80,9 +86,13 @@ function estadoCalmo(e: EstadoAgente): EstadoAgente {
 }
 const LARGURA_EXPANDIDA = 660;
 const ALTURA_COMPACTA = 30;
-const AGENTE_DA_ABA: Partial<Record<AbaIlha, AgenteId>> = { hoje: "organizador", foco: "tutor", conexoes: "java", claude: "java" };
+const ALTURA_COMPACTA_MIDIA = 34;
+const TAMANHO_DA_CAPA_COMPACTA = 28;
+const AGENTE_DA_ABA: Partial<Record<VisaoIlha, AgenteId>> = { hoje: "organizador", foco: "tutor", conexoes: "java", claude: "java" };
 const RODIZIO_MS = 8 * 60_000;
-const ABAS_SEM_LATERAL: AbaIlha[] = ["chat", "midia"];
+const ABAS_SEM_LATERAL: VisaoIlha[] = ["chat", "midia"];
+const LIMIAR_DA_ROLAGEM = 40;
+const INTERVALO_ENTRE_TROCAS_MS = 180;
 
 function agenteDoRodizio(favorito: AgenteId, agora: number): AgenteId {
   const ordem: AgenteId[] = [favorito, ...AGENTES.filter((a) => a !== favorito)];
@@ -113,7 +123,12 @@ export function Ilha() {
   const privacidade = useConfig((s) => s.privacidade);
   const estado = useIlha((s) => s.estado);
   const aba = useIlha((s) => s.aba);
+  const secaoHoje = useIlha((s) => s.secaoHoje);
   const revelacao = useIlha((s) => s.revelacao);
+  const saudacao = useIlha((s) => s.saudacao);
+  const encerrarSaudacao = useIlha((s) => s.encerrarSaudacao);
+  const saudando = saudacao !== null;
+  usarSaudacaoDiaria(cfg.ativa);
   const definirEstado = useIlha((s) => s.definirEstado);
   const abrir = useIlha((s) => s.abrir);
   const recolher = useIlha((s) => s.recolher);
@@ -132,6 +147,8 @@ export function Ilha() {
   const minuto = useAgora(60_000, true);
   const agenteDaVez = agenteDoRodizio(favorito, minuto);
   const claudeAtivo = useClaudeCode(sessaoAtiva);
+  const sessaoLateral = useClaudeCode((s) => s.sessoes[s.focada ?? ""] ?? s.sessoes[s.ordem[0]]);
+  const estadoLateral = sessaoLateral && pedidosClaude.some((p) => p.sessao === sessaoLateral.id) ? "aprovacao" : sessaoLateral?.estado ?? "terminou";
   const raiz = useRef<HTMLDivElement>(null);
   const corpoIlha = useRef<HTMLDivElement>(null);
   const [sobre, setSobre] = useState(false);
@@ -146,6 +163,18 @@ export function Ilha() {
   }, []);
   usarAreaInterativa([".ilha-raiz .ilha", ".ilha-gatilho", ".ilha-barra-aba", ".ilha-pop"]);
   usarCursorFora(useCallback(() => setSobre(false), []));
+  useEffect(() => {
+    let ativo = true;
+    let desligar: () => void = () => undefined;
+    void ouvirEvento(EVENTO_DA_SAUDACAO, () => useIlha.getState().saudar()).then((f) => {
+      if (ativo) desligar = f;
+      else f();
+    });
+    return () => {
+      ativo = false;
+      desligar();
+    };
+  }, []);
   const [barraEmUso, setBarraEmUso] = useState(false);
   const aparencia = usarAparenciaDeBorda(cfg.fundo, cfg.opacidade);
   const [restanteFechar, setRestanteFechar] = useState<number | null>(null);
@@ -160,10 +189,13 @@ export function Ilha() {
     [],
   );
 
-  const claudeInstalado = useConfig((s) => s.claudeInstalado);
   const desligadas = useConfig((s) => s.funcoesDesligadas);
-  const abas = cfg.ordemAbas.filter((a) => cfg.blocos[a] && (a !== "claude" || claudeInstalado) && abaLigada(a, desligadas));
-  const abaAtual = abas.includes(aba) ? aba : abas[0] ?? "hoje";
+  const comAvisos = agentes.alertas.length > 0 || (estado === "expandida" && aba === "avisos");
+  const abas = cfg.ordemAbas.filter((a) => cfg.blocos[a] && (a !== "avisos" || comAvisos) && abaLigada(a, desligadas));
+  const capturaDisponivel = tiposDeCapturaLigados(desligadas).length > 0;
+  const abaAtual: VisaoIlha = aba === "captura" && capturaDisponivel ? "captura" : abas.includes(aba as AbaIlha) ? aba : abas[0] ?? "hoje";
+  const abaAntesDaCaptura = useRef<AbaIlha>("hoje");
+  const rolagemDasAbas = useRef({ acumulado: 0, ultimaTroca: 0 });
   const frente = usarEstadoDaFrente(cfg.ativa);
   const [lateraisLivresNativo, setLateraisLivresNativo] = useState(true);
   useEffect(() => {
@@ -181,7 +213,7 @@ export function Ilha() {
   const trabalhando = AGENTES.filter((a) => ["pensando", "escrevendo"].includes(estadoDoAgente(agentes, a)));
 
   const pedidoPendente = pedidosClaude.length > 0;
-  const estadoEfetivo = coberta && estado !== "expandida" && !revelacao && !pedidoPendente ? "escondida" : (cfg.modo === "fixo" || pedidoPendente) && estado === "escondida" ? "compacta" : estado;
+  const estadoEfetivo = saudando ? "compacta" : coberta && estado !== "expandida" && !revelacao && !pedidoPendente ? "escondida" : (cfg.modo === "fixo" || pedidoPendente) && estado === "escondida" ? "compacta" : estado;
 
   useEffect(() => {
     if (cfg.modo !== "esconder" || estadoEfetivo !== "compacta" || sobre || barraEmUso || revelacao || frescos > 0 || pomodoro.rodando || atualizacao.fase !== "nada" || pedidoPendente) return;
@@ -262,12 +294,13 @@ export function Ilha() {
   if (!cfg.ativa || frente.telaCheia) return null;
 
   const escala = ESCALA[cfg.tamanho];
-  const alvo =
-    estadoEfetivo === "escondida"
+  const alvo = saudando
+    ? { w: LARGURA_DA_SAUDACAO, h: ALTURA_DA_SAUDACAO, r: 40 }
+    : estadoEfetivo === "escondida"
       ? { w: 120, h: 6, r: 6 }
       : estadoEfetivo === "compacta"
-        ? { w: compacta.largura, h: ALTURA_COMPACTA, r: 12 }
-        : { w: LARGURA_EXPANDIDA, h: ALTURA_ABA[abaAtual], r: 30 };
+        ? { w: compacta.largura, h: compacta.tipo === "midia" ? ALTURA_COMPACTA_MIDIA : ALTURA_COMPACTA, r: compacta.tipo === "midia" ? 14 : 12 }
+        : { w: LARGURA_ABA[abaAtual] ?? LARGURA_EXPANDIDA, h: alturaDaVisao(abaAtual, secaoHoje), r: 30 };
   const crescendo = alvo.w * alvo.h >= anterior.current.w * anterior.current.h;
   anterior.current = { w: alvo.w, h: alvo.h };
   const transicao = crescendo ? MOLA : FECHAR;
@@ -277,9 +310,9 @@ export function Ilha() {
   const agenteCompacto = ["agente", "pomodoro", "relogio", "nada"].includes(compacta.tipo) ? agenteDaVez : compacta.tipo === "trabalho" ? trabalhando[0] : compacta.tipo === "revelacao" && !revelacao?.marca ? revelacao?.agente : undefined;
   const agenteContinuo = estadoEfetivo === "expandida" ? agenteLateral : agenteCompacto ?? agenteDaVez;
   const restantePomodoro = restanteAtual(pomodoro, agora);
-  const barraVisivel = cfg.laterais && estadoEfetivo !== "escondida" && lateraisLivres;
+  const barraVisivel = cfg.laterais && estadoEfetivo !== "escondida" && lateraisLivres && !saudando;
 
-  const abaDaCompacta = (): AbaIlha | undefined =>
+  const abaDaCompacta = (): VisaoIlha | undefined =>
     compacta.tipo === "revelacao" ? revelacao?.aba : compacta.tipo === "pomodoro" ? "foco" : compacta.tipo === "midia" ? "midia" : compacta.tipo === "trabalho" ? "chat" : compacta.tipo === "claude" || compacta.tipo === "claudePedido" ? "claude" : undefined;
 
   const acionarCompacta = () => {
@@ -340,7 +373,7 @@ export function Ilha() {
         return (
           <>
             <div className="ilha-compacta-lado">
-              <span className="ilha-capa" style={{ width: 24, height: 24, background: fundoDaCapa(midia.faixa) }} />
+              <span className="ilha-capa ilha-capa-compacta" style={{ width: TAMANHO_DA_CAPA_COMPACTA, height: TAMANHO_DA_CAPA_COMPACTA, background: fundoDaCapa(midia.faixa) }} />
             </div>
             <span className="ilha-compacta-texto privado">{midia.faixa?.titulo ?? ""}</span>
             <div className="ilha-compacta-lado">
@@ -364,10 +397,10 @@ export function Ilha() {
         return (
           <>
             <div className="ilha-compacta-lado">
-              <Marca marca="claudecode" tamanho={16} />
+              <Marca marca={MARCA_DA_FERRAMENTA[pedidosClaude[0]?.ferramentaDeCodigo ?? "claude"]} tamanho={16} />
             </div>
             <span className="ilha-compacta-texto ilha-claude-compacta" data-estado="aprovacao">
-              {T.ilha.claude.permissaoCompacta(pedidosClaude[0]?.projeto ?? "")}
+              {T.ilha.claude.permissaoCompacta(nomeDaFerramenta(pedidosClaude[0]?.ferramentaDeCodigo), pedidosClaude[0]?.projeto ?? "")}
             </span>
             <div className="ilha-compacta-lado">
               <ShieldAlert size={15} color="#f0a060" />
@@ -379,7 +412,7 @@ export function Ilha() {
         return (
           <>
             <div className="ilha-compacta-lado">
-              <Marca marca="claudecode" tamanho={16} />
+              <Marca marca={MARCA_DA_FERRAMENTA[claudeAtivo?.ferramenta ?? "claude"]} tamanho={16} />
             </div>
             {passo && claudeAtivo ? <EtapasAnimadas contexto={claudeAtivo.id} etapas={claudeAtivo.passos.filter((p) => p.tipo === "ferramenta" || p.tipo === "fim" || p.tipo === "erro").map((p) => ({ id: p.id, texto: `${p.rotulo} ${p.detalhe ?? ""}`.trim() }))} compacta /> : <span className="ilha-compacta-texto brilho-texto">{T.ilha.claude.estados[claudeAtivo?.estado ?? "pensando"]}</span>}
             <div className="ilha-compacta-lado">
@@ -415,7 +448,7 @@ export function Ilha() {
           escala={escala}
           larguraDaIlha={alvo.w * escala}
           aparencia={aparencia}
-          aoAbrirAba={(a) => alternarAbaDaBarra(abas.includes(a) ? a : abaAtual)}
+          aoAbrirAba={(a, secao) => alternarAbaDaBarra(abas.includes(a) ? a : abas[0] ?? "hoje", secao)}
           aoUsar={setBarraEmUso}
         />
       )}
@@ -438,7 +471,7 @@ export function Ilha() {
         ref={raiz}
         className="ilha-raiz"
         data-privacidade={privacidade ? "sim" : "nao"}
-        data-fundo-claro={aparencia.claro || undefined}
+        {...atributosDoFundo(aparencia)}
         style={{
           ...variaveisDaBorda(aparencia),
           transform: `translateX(-50%) scale(${escala})`,
@@ -475,10 +508,12 @@ export function Ilha() {
         >
           <div className="ilha-recorte">
             <AnimatePresence mode="popLayout" initial={false}>
-              {estadoEfetivo === "compacta" && (
+              {saudacao && <Saudacao key={`saudacao-${saudacao.id}`} versaoNova={saudacao.versaoNova} aoTerminar={encerrarSaudacao} />}
+              {estadoEfetivo === "compacta" && !saudando && (
                 <motion.div
                   key={`c-${compacta.tipo}`}
                   className="ilha-compacta"
+                  data-tipo={compacta.tipo}
                   role="button"
                   tabIndex={0}
                   aria-label={T.ilha.expandir}
@@ -517,7 +552,24 @@ export function Ilha() {
                   animate={{ opacity: 1, filter: "blur(0px)", scale: 1, transition: { delay: 0.16, duration: 0.3 } }}
                   exit={{ opacity: 0, filter: "blur(8px)", scale: 0.97, transition: { duration: 0.16 } }}
                 >
-                  <div className="ilha-cabecalho">
+                  <div
+                    className="ilha-cabecalho"
+                    onWheel={(e) => {
+                      const r = rolagemDasAbas.current;
+                      const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+                      const agoraMs = Date.now();
+                      if (agoraMs - r.ultimaTroca < INTERVALO_ENTRE_TROCAS_MS) return;
+                      r.acumulado += delta;
+                      if (Math.abs(r.acumulado) < LIMIAR_DA_ROLAGEM) return;
+                      const passo = r.acumulado > 0 ? 1 : -1;
+                      r.acumulado = 0;
+                      r.ultimaTroca = agoraMs;
+                      const proxima = abaVizinha(abas, abaAtual === "captura" ? abaAntesDaCaptura.current : abaAtual, passo);
+                      if (!proxima || proxima === abaAtual) return;
+                      void tocarSom("blip");
+                      abrir(proxima);
+                    }}
+                  >
                     <div className="ilha-abas" role="tablist" aria-label={T.app.nome}>
                       {abas.map((a, i) => {
                         const Icone = ICONE_ABA[a];
@@ -537,7 +589,7 @@ export function Ilha() {
                               abrir(a);
                             }}
                           >
-                            {a === "claude" ? <Marca marca="claudecode" tamanho={14} monocromatica={a !== abaAtual} /> : <Icone size={14} />}
+                            <Icone size={14} />
                             {a === abaAtual && <span className="ilha-aba-nome">{T.ilha.abas[a]}</span>}
                             {a === "claude" && pedidosClaude.length > 0 && <span className="ilha-aba-selo">{pedidosClaude.length}</span>}
                             {a === "avisos" && naoVistos > 0 && <span className="ilha-aba-selo">{naoVistos}</span>}
@@ -546,6 +598,26 @@ export function Ilha() {
                       })}
                     </div>
                     <div className="ilha-acoes">
+                      {capturaDisponivel && (
+                        <button
+                          type="button"
+                          className="ilha-acao"
+                          aria-label={T.ilha.capturar}
+                          aria-pressed={abaAtual === "captura"}
+                          data-dica={T.ilha.capturar}
+                          onClick={() => {
+                            void tocarSom("blip");
+                            if (abaAtual === "captura") {
+                              abrir(abas.includes(abaAntesDaCaptura.current) ? abaAntesDaCaptura.current : abas[0] ?? "hoje");
+                              return;
+                            }
+                            abaAntesDaCaptura.current = abaAtual;
+                            abrir("captura");
+                          }}
+                        >
+                          <Plus size={15} />
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="ilha-acao"
@@ -561,7 +633,7 @@ export function Ilha() {
                         aria-label={T.ilha.abrirSistema}
                         data-dica={T.ilha.abrirSistema}
                         onClick={() => {
-                          const rota = { hoje: "journal", captura: "inicio", midia: "inicio", foco: "estudos", habitos: "journal", chat: "chat", conexoes: "conexoes", calendario: "calendario", avisos: "inicio", claude: "configuracoes" } as const;
+                          const rota = { hoje: secaoHoje === "agenda" ? "calendario" : "journal", captura: "inicio", midia: "inicio", foco: "estudos", chat: "chat", conexoes: "conexoes", avisos: "inicio", claude: "configuracoes" } as const;
                           irPara(rota[abaAtual]);
                           recolher();
                           void tocarSom("open");
@@ -576,9 +648,17 @@ export function Ilha() {
                   </div>
                   <div className="ilha-miolo">
                   {!ABAS_SEM_LATERAL.includes(abaAtual) && <motion.div className="ilha-lateral" initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { delay: 0.2, duration: 0.2 } }}>
-                    <EspacoDoPersonagem agente={agenteLateral} tamanho={ALTURA_ABA[abaAtual] < 200 ? 50 : 70} posicao="expandida" />
+                    <EspacoDoPersonagem agente={agenteLateral} tamanho={alturaDaVisao(abaAtual, secaoHoje) < 200 ? 50 : 70} posicao="expandida" />
                     <span className="ilha-lateral-nome cortar">{nomes[agenteLateral]}</span>
-                    <span className="ilha-lateral-cargo" title={cargos[agenteLateral]}>{cargos[agenteLateral]}</span>
+                    {abaAtual === "claude" && sessaoLateral ? (
+                      <>
+                        <span className="ilha-lateral-cargo cortar" title={sessaoLateral.cwd}>{sessaoLateral.projeto}</span>
+                        {sessaoLateral.modelo && <span className="ilha-lateral-modelo cortar" title={sessaoLateral.modelo}>{nomeDoModelo(sessaoLateral.modelo)}</span>}
+                        <span className="ilha-lateral-estado" data-estado={estadoLateral}>{T.ilha.claude.estados[estadoLateral]}</span>
+                      </>
+                    ) : (
+                      <span className="ilha-lateral-cargo" title={cargos[agenteLateral]}>{cargos[agenteLateral]}</span>
+                    )}
                   </motion.div>}
                   <div className="ilha-visoes">
                     <AnimatePresence mode="wait" initial={false}>
@@ -598,7 +678,7 @@ export function Ilha() {
               )}
             </AnimatePresence>
           </div>
-          <PersonagemContinuo ilha={corpoIlha} posicao={estadoEfetivo === "expandida" ? "expandida" : "compacta"} ativo={estadoEfetivo !== "escondida"} escala={escala} agente={agenteContinuo} estado={estadoEfetivo === "compacta" ? estadoCalmo(estadoDoAgente(agentes, agenteContinuo)) : estadoDoAgente(agentes, agenteContinuo)} rotulo={nomes[agenteContinuo]} destinoKey={estadoEfetivo === "expandida" ? abaAtual : compacta.tipo} />
+          <PersonagemContinuo ilha={corpoIlha} posicao={estadoEfetivo === "expandida" ? "expandida" : "compacta"} ativo={estadoEfetivo !== "escondida" && !saudando} escala={escala} agente={agenteContinuo} estado={estadoEfetivo === "compacta" ? estadoCalmo(estadoDoAgente(agentes, agenteContinuo)) : estadoDoAgente(agentes, agenteContinuo)} rotulo={nomes[agenteContinuo]} destinoKey={estadoEfetivo === "expandida" ? abaAtual : compacta.tipo} />
           {restanteFechar != null && restanteFechar <= 10000 && (
             <span className="ilha-contagem" style={{ width: (restanteFechar / 10000) * 160 }} aria-hidden="true" />
           )}

@@ -8,6 +8,10 @@ export function usarAparenciaDeBorda(fundo: string, opacidade: number): Aparenci
   return useMemo(() => aparenciaDeBorda(fundo, opacidade, destaque && hexValido(destaque) ? destaque : DESTAQUE_PADRAO.escuro), [fundo, opacidade, destaque]);
 }
 
+export function atributosDoFundo(a: AparenciaDeBorda) {
+  return { "data-fundo-claro": a.claro || undefined, "data-fundo-escuro": !a.claro || undefined };
+}
+
 export function variaveisDaBorda(a: AparenciaDeBorda): Record<string, string> {
   return {
     "--borda-fundo": a.fundo,

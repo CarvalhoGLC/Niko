@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { AgenteId } from "../tipos";
 import type { MarcaId } from "../marcas/Marca";
-import { useConfig, type AbaIlha } from "./configuracoes";
+import { useConfig, type SecaoHoje, type VisaoIlha } from "./configuracoes";
 
 export type EstadoIlha = "escondida" | "compacta" | "expandida";
 
@@ -10,7 +10,7 @@ export interface Revelacao {
   tipo: "sucesso" | "info" | "alerta";
   marca?: MarcaId;
   agente?: AgenteId;
-  aba?: AbaIlha;
+  aba?: VisaoIlha;
 }
 
 interface Pendente {
@@ -20,11 +20,16 @@ interface Pendente {
 
 interface EstadoDaIlha {
   estado: EstadoIlha;
-  aba: AbaIlha;
+  aba: VisaoIlha;
+  secaoHoje: SecaoHoje;
+  saudacao: { id: number; versaoNova?: string } | null;
   revelacao: Revelacao | null;
   ultimaInteracao: number;
   definirEstado: (estado: EstadoIlha) => void;
-  abrir: (aba?: AbaIlha) => void;
+  abrir: (aba?: VisaoIlha) => void;
+  definirSecaoHoje: (secao: SecaoHoje) => void;
+  saudar: (versaoNova?: string) => void;
+  encerrarSaudacao: () => void;
   recolher: () => void;
   revelar: (r: Revelacao, ms?: number, importancia?: "alta" | "normal") => void;
   dispensarRevelacao: () => void;
@@ -50,11 +55,16 @@ export const useIlha = create<EstadoDaIlha>()((set, get) => {
 
   return {
     estado: "compacta",
-    aba: "calendario",
+    aba: "hoje",
+    secaoHoje: "agenda",
+    saudacao: null,
     revelacao: null,
     ultimaInteracao: Date.now(),
     definirEstado: (estado) => set({ estado, ultimaInteracao: Date.now() }),
     abrir: (aba) => set({ estado: "expandida", aba: aba ?? get().aba, ultimaInteracao: Date.now() }),
+    definirSecaoHoje: (secaoHoje) => set({ secaoHoje, ultimaInteracao: Date.now() }),
+    saudar: (versaoNova) => set({ saudacao: { id: Date.now(), versaoNova }, estado: "compacta", ultimaInteracao: Date.now() }),
+    encerrarSaudacao: () => set({ saudacao: null, ultimaInteracao: Date.now() }),
     recolher: () => set({ estado: "compacta", ultimaInteracao: Date.now() }),
     revelar: (r, ms = 4500, importancia = "alta") => {
       const { ilha, naoPerturbe } = useConfig.getState();

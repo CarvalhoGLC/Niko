@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde::Deserialize;
-use tauri::{AppHandle, Manager};
+use tauri::WebviewWindow;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{
     DwmQueryThumbnailSourceSize, DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
@@ -19,7 +19,7 @@ pub struct Miniatura {
 }
 
 #[derive(Default)]
-pub struct Miniaturas(Mutex<HashMap<isize, isize>>);
+pub struct Miniaturas(Mutex<HashMap<(isize, isize), isize>>);
 
 fn encaixar(fonte_largura: i32, fonte_altura: i32, x: i32, y: i32, largura: i32, altura: i32) -> RECT {
     if fonte_largura <= 0 || fonte_altura <= 0 {
@@ -34,11 +34,11 @@ fn encaixar(fonte_largura: i32, fonte_altura: i32, x: i32, y: i32, largura: i32,
 }
 
 #[tauri::command]
-pub fn miniaturas_janelas(app: AppHandle, itens: Vec<Miniatura>, estado: tauri::State<Miniaturas>) {
+pub fn miniaturas_janelas(window: WebviewWindow, itens: Vec<Miniatura>, estado: tauri::State<Miniaturas>) {
     let Ok(mut registradas) = estado.0.lock() else { return };
-    let Some(dock) = app.get_webview_window("dock") else { return };
-    let (Ok(destino), Ok(escala)) = (dock.hwnd(), dock.scale_factor()) else { return };
+    let (Ok(destino), Ok(escala)) = (window.hwnd(), window.scale_factor()) else { return };
     let destino = HWND(destino.0);
+    let chave_destino = destino.0 as isize;
 
     let mut pedidas: HashMap<isize, &Miniatura> = HashMap::new();
     for item in &itens {
@@ -49,8 +49,8 @@ pub fn miniaturas_janelas(app: AppHandle, itens: Vec<Miniatura>, estado: tauri::
         }
     }
 
-    registradas.retain(|fonte, miniatura| {
-        let manter = pedidas.contains_key(fonte);
+    registradas.retain(|(dono, fonte), miniatura| {
+        let manter = *dono != chave_destino || pedidas.contains_key(fonte);
         if !manter {
             let _ = unsafe { DwmUnregisterThumbnail(*miniatura) };
         }
@@ -58,11 +58,11 @@ pub fn miniaturas_janelas(app: AppHandle, itens: Vec<Miniatura>, estado: tauri::
     });
 
     for (fonte, item) in pedidas {
-        let miniatura = match registradas.get(&fonte) {
+        let miniatura = match registradas.get(&(chave_destino, fonte)) {
             Some(m) => *m,
             None => match unsafe { DwmRegisterThumbnail(destino, HWND(fonte as *mut core::ffi::c_void)) } {
                 Ok(m) => {
-                    registradas.insert(fonte, m);
+                    registradas.insert((chave_destino, fonte), m);
                     m
                 }
                 Err(_) => continue,

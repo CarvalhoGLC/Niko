@@ -12,6 +12,8 @@ process.env.HOME = raizTemporaria;
 process.env.APPDATA = join(raizTemporaria, "AppData");
 process.env.XDG_DATA_HOME = join(raizTemporaria, ".local", "share");
 process.env.NIKO_PORTA = "47999";
+const memoriaLocal = new Map();
+globalThis.localStorage ??= { getItem: (k) => memoriaLocal.get(k) ?? null, setItem: (k, v) => memoriaLocal.set(k, String(v)), removeItem: (k) => memoriaLocal.delete(k) };
 
 const vite = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", optimizeDeps: { noDiscovery: true } });
 const claude = await vite.ssrLoadModule("/servidor/claude.ts");
@@ -266,6 +268,22 @@ test("evento repetido numa reconexão não duplica a atividade", () => {
   assert.equal(sessao.projeto, "app");
 });
 
+test("sessão encerrada some da ilha e aba fechada não volta com eventos antigos", () => {
+  const { aplicar, fechar } = useClaudeCode.getState();
+  const antes = new Date(Date.now() - 60_000).toISOString();
+  aplicar({ id: "s7-inicio", recebidoEm: antes, evento: "SessionStart", sessao: "s7", cwd: "C:\\projetos\\app", dados: {} });
+  aplicar({ id: "s8-inicio", recebidoEm: antes, evento: "SessionStart", sessao: "s8", cwd: "C:\\projetos\\app", dados: {} });
+  assert.ok(useClaudeCode.getState().sessoes.s7);
+  aplicar({ id: "s7-fim", recebidoEm: antes, evento: "SessionEnd", sessao: "s7", cwd: "C:\\projetos\\app", dados: { reason: "clear" } });
+  assert.equal(useClaudeCode.getState().sessoes.s7, undefined);
+  assert.ok(!useClaudeCode.getState().ordem.includes("s7"));
+  fechar("s8");
+  aplicar({ id: "s8-antigo", recebidoEm: antes, evento: "PreToolUse", sessao: "s8", cwd: "C:\\projetos\\app", dados: { tool_name: "Read", tool_input: { file_path: "a.ts" } } });
+  assert.equal(useClaudeCode.getState().sessoes.s8, undefined);
+  aplicar({ id: "s8-novo", recebidoEm: new Date(Date.now() + 1000).toISOString(), evento: "UserPromptSubmit", sessao: "s8", cwd: "C:\\projetos\\app", dados: { prompt: "continua" } });
+  assert.ok(useClaudeCode.getState().sessoes.s8);
+});
+
 test("pedido que sai da ilha sem decisão deixa o motivo na atividade", () => {
   const agora = new Date().toISOString();
   const { aplicar } = useClaudeCode.getState();
@@ -280,4 +298,29 @@ test("pedido que sai da ilha sem decisão deixa o motivo na atividade", () => {
   const passosAntes = useClaudeCode.getState().sessoes.s6.passos.length;
   aplicar({ id: "fim-2", recebidoEm: agora, evento: "NikoPedidoEncerrado", sessao: "s6", cwd: "", pedidoId: "p-7", dados: { motivo: "decidido", decisao: "allow" } });
   assert.equal(useClaudeCode.getState().sessoes.s6.passos.length, passosAntes);
+});
+
+test("lê o modelo da última resposta no fim do transcript", () => {
+  const caminho = join(raizTemporaria, "sessao.jsonl");
+  const linhas = [
+    { type: "assistant", message: { model: "claude-sonnet-4-5-20250929" } },
+    { type: "user", message: { content: "troca o modelo" } },
+    { type: "assistant", message: { model: "<synthetic>" } },
+    { type: "assistant", message: { model: "claude-opus-4-7" } },
+    { type: "system", content: "fim" },
+  ];
+  writeFileSync(caminho, `${"x".repeat(300 * 1024)}\n${linhas.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  assert.equal(claude.modeloDoTranscript(caminho), "claude-opus-4-7");
+  assert.equal(claude.modeloDoTranscript("relativo.jsonl"), undefined);
+  assert.equal(claude.modeloDoTranscript(join(raizTemporaria, "nao-existe.jsonl")), undefined);
+  assert.equal(claude.modeloDoTranscript(join(raizTemporaria, "settings.txt")), undefined);
+});
+
+test("mostra o modelo com nome legível", async () => {
+  const { nomeDoModelo } = await vite.ssrLoadModule("/src/estado/claudeCode.ts");
+  assert.equal(nomeDoModelo("claude-opus-4-7[1m]"), "Opus 4.7");
+  assert.equal(nomeDoModelo("claude-sonnet-4-5-20250929"), "Sonnet 4.5");
+  assert.equal(nomeDoModelo("claude-opus-4-20250514"), "Opus 4");
+  assert.equal(nomeDoModelo("claude-3-5-haiku-20241022"), "Haiku 3.5");
+  assert.equal(nomeDoModelo("gpt-5-codex"), "gpt-5-codex");
 });

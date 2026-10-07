@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   Bell, Bot, Check, ChevronRight, CircleCheck, CircleX, Code2, Copy, FilePen, FileText, FolderOpen, FolderSearch, Globe, ListChecks, LoaderCircle, MessageSquare, Search, Settings, ShieldAlert, SquareTerminal, X, type LucideIcon,
 } from "lucide-react";
 import { useClaudeCode, type PassoClaude, type SessaoClaude, type PedidoDePermissao } from "../../../estado/claudeCode";
-import { claudeCode, type EstadoDaInstalacao, type RegraSugerida } from "../../../ponte/claudeCode";
+import { agentesDeCodigo, claudeCode, FERRAMENTAS_DE_CODIGO, type RegraSugerida } from "../../../ponte/claudeCode";
 import { contarMudancas } from "../../../utilitarios/diff";
 import { DiffCompacto } from "./DiffCompacto";
 import { UsoDasIas } from "./UsoDasIas";
@@ -14,7 +15,9 @@ import { TextoRico } from "../../../componentes/TextoRico";
 import { T } from "../../../textos/textos";
 import "./claude.css";
 import { EtapasAnimadas } from "../animacoes/EtapasAnimadas";
-import { abrirConfiguracoesClaude } from "./navegacao";
+import { fecharSessao } from "./usarClaudeCode";
+import { ConfigDasFerramentas } from "./ConfigDasFerramentas";
+import { MARCA_DA_FERRAMENTA, nomeDaFerramenta } from "./ferramentas";
 
 const ESPERA_MS = 110_000;
 const C = T.ilha.claude;
@@ -92,10 +95,11 @@ function Permissao({ pedido, fila }: { pedido: PedidoDePermissao; fila: number }
       .finally(() => setEnviando(false));
   };
   return (
-    <div className="vsc-permissao" role="alertdialog" aria-label={C.querPermissao(pedido.ferramenta)}>
+    <div className="vsc-permissao" role="alertdialog" aria-label={C.querPermissao(nomeDaFerramenta(pedido.ferramentaDeCodigo), pedido.ferramenta)}>
       <div className="vsc-permissao-topo">
         <ShieldAlert size={15} />
-        <span>{C.querPermissao(pedido.ferramenta)}</span>
+        <Marca marca={MARCA_DA_FERRAMENTA[pedido.ferramentaDeCodigo]} tamanho={14} />
+        <span>{C.querPermissao(nomeDaFerramenta(pedido.ferramentaDeCodigo), pedido.ferramenta)}</span>
         <span className="vsc-chip">{pedido.projeto}</span>
       </div>
       {pedido.alteracao ? <DiffCompacto alteracao={pedido.alteracao} maximo={80} /> : <pre className="vsc-codigo">{pedido.entrada}</pre>}
@@ -236,15 +240,27 @@ function Resposta({ sessao }: { sessao: SessaoClaude }) {
   );
 }
 
-function SemSessoes({ instalacao }: { instalacao: EstadoDaInstalacao | null }) {
-  const conectado = instalacao?.instalado;
+function SemSessoes({ conectado, aoConfigurar }: { conectado: boolean; aoConfigurar: () => void }) {
   return (
     <div className="vsc-vazio">
-      <Marca marca="claudecode" tamanho={28} />
+      <span className="vsc-vazio-logos" aria-hidden="true">
+        {FERRAMENTAS_DE_CODIGO.map((f, i) => (
+          <motion.span
+            key={f}
+            className="vsc-vazio-logo"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: [0, -3, 0] }}
+            transition={{ opacity: { delay: i * 0.06 }, y: { delay: 0.4 + i * 0.18, duration: 2.4, repeat: Infinity, ease: "easeInOut" } }}
+          >
+            <Marca marca={MARCA_DA_FERRAMENTA[f]} tamanho={18} />
+          </motion.span>
+        ))}
+      </span>
       <b>{conectado ? C.semSessoes : C.naoConectado}</b>
       <span className="vsc-dim">{conectado ? C.semSessoesDica : C.naoConectadoDica}</span>
       {!conectado && (
-        <button type="button" className="vsc-botao vsc-botao-primario" onClick={abrirConfiguracoesClaude}>
+        <button type="button" className="vsc-botao vsc-botao-primario" onClick={aoConfigurar}>
+          <Settings size={13} />
           {C.abrirConfiguracoes}
         </button>
       )}
@@ -258,25 +274,29 @@ export function VisaoClaude() {
   const pedidos = useClaudeCode((s) => s.pedidos);
   const focada = useClaudeCode((s) => s.focada);
   const focar = useClaudeCode((s) => s.focar);
-  const fechar = useClaudeCode((s) => s.fechar);
   const agora = usarAgora(30000);
-  const [instalacao, setInstalacao] = useState<EstadoDaInstalacao | null>(null);
+  const [conectado, setConectado] = useState(true);
+  const [configAberta, setConfigAberta] = useState(false);
   const sessao = sessoes[focada ?? ""] ?? sessoes[ordem[0]];
   const pedido = pedidos.find((p) => p.sessao === sessao?.id) ?? pedidos[0];
   const [painel, setPainel] = useState<"resposta" | "atividade">("atividade");
 
   useEffect(() => {
-    void claudeCode.instalacao().then(setInstalacao).catch(() => setInstalacao(null));
-  }, []);
+    if (configAberta) return;
+    void agentesDeCodigo
+      .estado()
+      .then((r) => setConectado(r.ferramentas.some((f) => f.instalado)))
+      .catch(() => setConectado(false));
+  }, [configAberta]);
 
   useEffect(() => {
     setPainel(sessao?.estado === "terminou" && sessao.resposta ? "resposta" : "atividade");
   }, [sessao?.id, sessao?.estado, sessao?.resposta]);
 
-  const ultimo = useMemo(() => [...(sessao?.passos ?? [])].reverse().find((p) => p.tipo === "ferramenta"), [sessao?.passos]);
-
   return (
+    <div className="ias">
     <div className="vsc">
+      <div className="vsc-topo">
       <div className="vsc-abas" role="tablist">
         {ordem.map((id) => {
           const s = sessoes[id];
@@ -285,17 +305,20 @@ export function VisaoClaude() {
           return (
             <div key={id} className="vsc-aba" data-ativa={s.id === sessao?.id || undefined} data-estado={temPedido ? "aprovacao" : s.estado}>
               <button type="button" role="tab" aria-selected={s.id === sessao?.id} className="vsc-aba-botao" onClick={() => focar(id)} title={s.cwd}>
-                <Marca marca="claudecode" tamanho={12} />
+                <Marca marca={MARCA_DA_FERRAMENTA[s.ferramenta ?? "claude"]} tamanho={12} />
                 <span className="vsc-aba-nome">{s.projeto}</span>
                 <span className="vsc-ponto" />
               </button>
-              <button type="button" className="vsc-aba-fechar" aria-label={C.fechar} title={C.fechar} onClick={() => fechar(id)}>
+              <button type="button" className="vsc-aba-fechar" aria-label={C.fechar} title={C.fechar} onClick={() => fecharSessao(id)}>
                 <X size={11} />
               </button>
             </div>
           );
         })}
+      </div>
         <span className="vsc-acoes-abas">
+          {sessao?.modo && <span className="vsc-dim vsc-acoes-texto">{C.modos[sessao.modo] ?? sessao.modo}</span>}
+          {sessao && <span className="vsc-dim vsc-acoes-texto">{quandoFoi(sessao.atualizadaEm, agora)}</span>}
           {sessao?.cwd && (
             <>
               <button type="button" className="vsc-icone-botao" aria-label={C.abrirVsCode} title={C.abrirVsCode} onClick={() => abrirProjeto(sessao.cwd, "vscode")}>
@@ -306,7 +329,8 @@ export function VisaoClaude() {
               </button>
             </>
           )}
-          <button type="button" className="vsc-icone-botao" aria-label={C.configurar} title={C.configurar} onClick={abrirConfiguracoesClaude}>
+          <UsoDasIas />
+          <button type="button" className="vsc-icone-botao vsc-engrenagem" aria-label={C.configurar} title={C.configurar} aria-pressed={configAberta} onClick={() => setConfigAberta((v) => !v)}>
             <Settings size={13} />
           </button>
         </span>
@@ -314,7 +338,7 @@ export function VisaoClaude() {
 
       <div className="vsc-corpo">
         {!sessao ? (
-          <SemSessoes instalacao={instalacao} />
+          <SemSessoes conectado={conectado} aoConfigurar={() => setConfigAberta(true)} />
         ) : pedido ? (
           <Permissao pedido={pedido} fila={pedidos.length} />
         ) : (
@@ -334,20 +358,8 @@ export function VisaoClaude() {
           </>
         )}
       </div>
-
-      <div className="vsc-status" data-estado={!sessao ? "ociosa" : pedido ? "aprovacao" : sessao.estado}>
-        {sessao && (
-          <span className="vsc-status-item">
-            {sessao.estado === "trabalhando" || sessao.estado === "pensando" ? <LoaderCircle size={12} className="girando" /> : pedido ? <ShieldAlert size={12} /> : sessao.estado === "erro" ? <CircleX size={12} /> : <CircleCheck size={12} />}
-            {pedido ? C.estados.aprovacao : C.estados[sessao.estado]}
-          </span>
-        )}
-        {sessao && ultimo && sessao.estado === "trabalhando" && <span className="vsc-status-item vsc-status-passo">{ultimo.rotulo} {ultimo.detalhe}</span>}
-        <span className="vsc-status-espaco" />
-        <UsoDasIas />
-        {sessao?.modo && <span className="vsc-status-item vsc-status-opcional">{C.modos[sessao.modo] ?? sessao.modo}</span>}
-        {sessao && <span className="vsc-status-item">{quandoFoi(sessao.atualizadaEm, agora)}</span>}
-      </div>
+      <AnimatePresence>{configAberta && <ConfigDasFerramentas key="config" aoFechar={() => setConfigAberta(false)} />}</AnimatePresence>
+    </div>
     </div>
   );
 }

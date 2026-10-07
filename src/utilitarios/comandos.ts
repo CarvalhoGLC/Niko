@@ -79,6 +79,38 @@ export function categoriaPelaDescricao<C extends { id: string; nome: string }>(c
   return regra ? categorias.find((c) => normalizarTexto(c.nome) === normalizarTexto(regra[0])) : undefined;
 }
 
+export function tipoDeCategoriaDoCartao(c: CartaoConfirmacao): "despesa" | "receita" | null {
+  if (c.tipo === "gasto" || c.tipo === "dividir") return "despesa";
+  if (c.tipo === "receita") return "receita";
+  return null;
+}
+
+function categoriaDoCartao(c: CartaoConfirmacao) {
+  const tipo = tipoDeCategoriaDoCartao(c);
+  return useFinancas.getState().categorias.find((x) => x.id === c.dados.categoriaId && x.tipo === tipo);
+}
+
+export function faltaCategoria(c: CartaoConfirmacao): boolean {
+  if (!tipoDeCategoriaDoCartao(c)) return false;
+  return !categoriaDoCartao(c) && !String(c.dados.novaCategoria ?? "").trim();
+}
+
+function resolverCategoria(c: CartaoConfirmacao): string | undefined {
+  const tipo = tipoDeCategoriaDoCartao(c);
+  if (!tipo) return undefined;
+  const existente = categoriaDoCartao(c);
+  if (existente) return existente.id;
+  const nova = String(c.dados.novaCategoria ?? "").trim().slice(0, 40);
+  return nova ? useFinancas.getState().obterOuCriarCategoria(nova, tipo).id : undefined;
+}
+
+export function dadosDeCategoria<C extends { id: string; nome: string }>(categorias: C[], pedida: string | undefined, descricao: string) {
+  const fin = useFinancas.getState();
+  const cat = acharPorNome(categorias, pedida) ?? categorias.find((c) => c.id === fin.categorizar(descricao)) ?? categoriaPelaDescricao(categorias, descricao);
+  if (cat) return { categoriaId: cat.id, novaCategoria: "" };
+  return { categoriaId: "", novaCategoria: pedida?.replace(/[_-]+/g, " ").trim().slice(0, 40) ?? "" };
+}
+
 function limparDescricao(texto: string): string {
   return texto
     .replace(/^(?:(?:um|uma|uns|umas|o|a|os|as)\s+)+/i, "")
@@ -98,7 +130,6 @@ function prepararLancamento(tipo: "gasto" | "receita", argumentos: string): Resu
   const quando = interpretarQuando(resto.join(" "));
   const descricao = (limparDescricao(quando.resto) || (tipo === "gasto" ? T.financas.tipos.despesa : T.financas.tipos.receita)).slice(0, 120);
   const categorias = useFinancas.getState().categorias.filter((c) => c.tipo === (tipo === "gasto" ? "despesa" : "receita"));
-  const cat = acharPorNome(categorias, categoria) ?? categorias.find((c) => c.id === fin.categorizar(descricao)) ?? categoriaPelaDescricao(categorias, descricao);
   const contaEscolhida = acharPorNome(contas, conta) ?? contas[0];
   return {
     agente: "operador",
@@ -110,7 +141,7 @@ function prepararLancamento(tipo: "gasto" | "receita", argumentos: string): Resu
       dados: {
         valor,
         descricao,
-        categoriaId: cat?.id ?? "",
+        ...dadosDeCategoria(categorias, categoria, descricao),
         contaId: contaEscolhida.id,
         data: quando.data ?? hojeISO(),
       },
@@ -134,13 +165,25 @@ function prepararDivisao(argumentos: string): ResultadoComando {
     confirmacao: {
       tipo: "dividir",
       situacao: "pendente",
-      dados: { valor, descricao: partes[2].slice(0, 120), pessoas: nomes, contaId: contas[0]?.id ?? "", data: hojeISO() },
+      dados: {
+        valor,
+        descricao: partes[2].slice(0, 120),
+        pessoas: nomes,
+        ...dadosDeCategoria(fin.categorias.filter((c) => c.tipo === "despesa"), undefined, partes[2]),
+        contaId: contas[0]?.id ?? "",
+        data: hojeISO(),
+      },
     },
   };
 }
 
 function semConectores(texto: string): string {
   return texto.replace(/^(?:(?:de|que|para|pra|pro|o|a)\s+)+/i, "").trim();
+}
+
+export function nomeDaCategoriaDoCartao(c: CartaoConfirmacao): string {
+  const nova = String(c.dados.novaCategoria ?? "").trim();
+  return categoriaDoCartao(c)?.nome ?? (nova ? T.chat.respostas.categoriaNova(nova) : T.financas.semCategoria);
 }
 
 export function linhasDaConfirmacao(c: CartaoConfirmacao): [string, string][] {
@@ -172,7 +215,7 @@ export function linhasDaConfirmacao(c: CartaoConfirmacao): [string, string][] {
       return [
         [R.valor, formatarDinheiro(Number(d.valor))],
         [R.descricao, String(d.descricao)],
-        [R.categoria, fin.categorias.find((x) => x.id === d.categoriaId)?.nome ?? T.financas.semCategoria],
+        [R.categoria, nomeDaCategoriaDoCartao(c)],
         [R.conta, fin.contas.find((x) => x.id === d.contaId)?.nome ?? ""],
         [R.data, formatar(String(d.data), "d 'de' MMM")],
       ];
@@ -183,6 +226,7 @@ export function linhasDaConfirmacao(c: CartaoConfirmacao): [string, string][] {
         [R.descricao, String(d.descricao)],
         [R.pessoas, pessoas.join(", ")],
         [R.parte, formatarDinheiro(Math.ceil(Number(d.valor) / (pessoas.length + 1)))],
+        [R.categoria, nomeDaCategoriaDoCartao(c)],
       ];
     }
   }
@@ -243,13 +287,14 @@ export function confirmarComando(c: CartaoConfirmacao): string | Promise<string>
     void useAgentes.getState().trabalhar("organizador", titulo, 400);
     return T.chat.respostas.lembrete(titulo, descreverQuando(data, d.hora ? String(d.hora) : undefined));
   }
+  if (faltaCategoria(c)) return T.chat.respostas.faltaCategoria;
   if (c.tipo === "gasto" || c.tipo === "receita") {
     if (!fin.contas.some((x) => x.id === d.contaId)) return T.chat.respostas.semConta;
     fin.lancar({
       tipo: c.tipo === "gasto" ? "despesa" : "receita",
       valor: Number(d.valor),
       descricao: String(d.descricao),
-      categoriaId: d.categoriaId ? String(d.categoriaId) : undefined,
+      categoriaId: resolverCategoria(c),
       contaId: String(d.contaId),
       data: String(d.data),
     });
@@ -268,7 +313,7 @@ export function confirmarComando(c: CartaoConfirmacao): string | Promise<string>
     pagadorId: EU,
     partes: participantes.map((p, i) => ({ pessoaId: p, valor: base + (i === 0 ? resto : 0) })),
     data: String(d.data),
-    categoriaId: categoriaPelaDescricao(fin.categorias.filter((x) => x.tipo === "despesa"), String(d.descricao))?.id,
+    categoriaId: resolverCategoria(c),
     contaId: d.contaId ? String(d.contaId) : undefined,
   });
   void useAgentes.getState().trabalhar("operador", `${T.financas.novaDivisao}: ${String(d.descricao)}`, 500);

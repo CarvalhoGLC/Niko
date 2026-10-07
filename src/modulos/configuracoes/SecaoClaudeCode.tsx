@@ -107,7 +107,7 @@ export function SecaoClaudeCode() {
         )}
       </div>
 
-      <LinhaAlternador rotulo={C.mostrarAba} dica={instalado ? undefined : C.mostrarAbaDica} ligado={ilha.blocos.claude} aoMudar={(v) => definirIlha({ blocos: { ...ilha.blocos, claude: v } })} />
+      <LinhaAlternador rotulo={C.mostrarAba} dica={C.mostrarAbaDica} ligado={ilha.blocos.claude} aoMudar={(v) => definirIlha({ blocos: { ...ilha.blocos, claude: v } })} />
       <div className="coluna" style={{ gap: 4 }}>
         <LinhaAlternador
           rotulo={C.notificar}

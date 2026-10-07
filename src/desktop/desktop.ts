@@ -12,7 +12,14 @@ const internos = typeof window !== "undefined" ? (window as unknown as { __TAURI
 
 export const NATIVO = Boolean(internos);
 
-export const JANELA: NomeJanela | null = NATIVO ? ((internos?.metadata?.currentWindow?.label as NomeJanela | undefined) ?? "sistema") : null;
+export const ROTULO: string | null = NATIVO ? internos?.metadata?.currentWindow?.label ?? "sistema" : null;
+
+export function tipoDaJanela(rotulo: string): NomeJanela {
+  if (rotulo === "dock" || rotulo.startsWith("dock-")) return "dock";
+  return rotulo === "ilha" ? "ilha" : "sistema";
+}
+
+export const JANELA: NomeJanela | null = ROTULO === null ? null : tipoDaJanela(ROTULO);
 
 export type Comando =
   | { tipo: "irPara"; rota: Rota; parametros?: Record<string, string> }
@@ -93,8 +100,26 @@ export function mostrarSistema() {
   return invocar("mostrar_sistema");
 }
 
+export function liberarSistemaInicial() {
+  return invocar("liberar_sistema_inicial");
+}
+
+export function tempoOciosoMs() {
+  return invocar<number>("tempo_ocioso_ms");
+}
+
+export async function versaoDoApp(): Promise<string> {
+  if (!NATIVO) return "web";
+  try {
+    const { getVersion } = await import("@tauri-apps/api/app");
+    return await getVersion();
+  } catch {
+    return "desconhecida";
+  }
+}
+
 export function informarAreaInterativa(retangulos: { x: number; y: number; w: number; h: number }[]) {
-  return invocar("area_interativa", { janela: JANELA, retangulos });
+  return invocar("area_interativa", { janela: ROTULO, retangulos });
 }
 
 export async function janelaAtual() {
@@ -216,6 +241,41 @@ export interface AppAberto {
   nome: string;
   caminho: string | null;
   icone: string | null;
+  monitor?: string;
+}
+
+export interface MonitorDoNiko {
+  nome: string;
+  rotulo: string;
+  numero: number;
+  principal: boolean;
+  largura: number;
+  altura: number;
+}
+
+export function definirDocks(ligado: boolean, escolha: string) {
+  return invocar("definir_docks", { ligado, escolha });
+}
+
+export function usarMonitores(): MonitorDoNiko[] {
+  const [lista, setLista] = useState<MonitorDoNiko[]>([]);
+  useEffect(() => {
+    if (!NATIVO) return;
+    let vivo = true;
+    let desligar: () => void = () => undefined;
+    void invocar<MonitorDoNiko[]>("monitores").then((r) => vivo && r && setLista(r));
+    void import("@tauri-apps/api/event").then(({ listen }) =>
+      listen<MonitorDoNiko[]>("niko://monitores", (e) => vivo && setLista(e.payload)).then((f) => {
+        if (vivo) desligar = f;
+        else f();
+      }),
+    );
+    return () => {
+      vivo = false;
+      desligar();
+    };
+  }, []);
+  return lista;
 }
 
 export function usarAppsAbertos(ativo: boolean): [AppAberto[], () => void] {

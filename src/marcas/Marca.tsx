@@ -1,9 +1,11 @@
 import {
   siStripe, siGithub, siVercel, siResend, siNotion, siCaldotcom, siN8n, siAnthropic, siOllama,
-  siNvidia, siOpencode, siQwen, siGooglegemini, siOpenrouter, siMistralai, siHuggingface, siDeepseek, siLmstudio, siGmail, siSupabase, siCloudflare, siClaudecode,
+  siNvidia, siOpencode, siQwen, siGooglegemini, siOpenrouter, siMistralai, siHuggingface, siDeepseek, siLmstudio, siGmail, siSupabase, siCloudflare, siClaudecode, siGithubcopilot, siKimi,
   siSpotify, siGooglechrome, siFirefoxbrowser, siZenbrowser, siYoutube, siYoutubemusic, siDeezer, siApplemusic, siTidal, siSoundcloud,
 } from "simple-icons";
 import type { ServicoId } from "../tipos";
+import logoCodex from "./lobe/codex.svg";
+import logoAntigravity from "./lobe/antigravity.svg";
 
 interface IconeMarca {
   title: string;
@@ -11,7 +13,14 @@ interface IconeMarca {
   hex: string;
 }
 
-export type MarcaId = ServicoId | "anthropic" | "ollama" | "nvidia" | "opencode" | "qwen" | "gemini" | "openrouter" | "mistral" | "huggingface" | "deepseek" | "lmstudio" | "claudecode" | MarcaDeMidia;
+export type MarcaId = ServicoId | "anthropic" | "ollama" | "nvidia" | "opencode" | "qwen" | "gemini" | "openrouter" | "mistral" | "huggingface" | "deepseek" | "lmstudio" | "claudecode" | "copilot" | "kimi" | MarcaDeMidia | MarcaColorida;
+
+export type MarcaColorida = "codex" | "antigravity";
+
+const MARCAS_COLORIDAS: Record<MarcaColorida, { title: string; url: string }> = {
+  codex: { title: "Codex", url: logoCodex },
+  antigravity: { title: "Antigravity", url: logoAntigravity },
+};
 
 export type MarcaDeMidia = "spotify" | "chrome" | "firefox" | "zen" | "youtube" | "youtubemusic" | "deezer" | "applemusic" | "tidal" | "soundcloud";
 
@@ -32,7 +41,7 @@ export function marcaDoApp(app: string): MarcaDeMidia | null {
   return PADROES_DE_MIDIA.find(([padrao]) => padrao.test(app))?.[1] ?? null;
 }
 
-export const MARCAS: Record<MarcaId, IconeMarca> = {
+export const MARCAS: Record<Exclude<MarcaId, MarcaColorida>, IconeMarca> = {
   stripe: siStripe,
   github: siGithub,
   vercel: siVercel,
@@ -55,6 +64,8 @@ export const MARCAS: Record<MarcaId, IconeMarca> = {
   deepseek: siDeepseek,
   lmstudio: siLmstudio,
   claudecode: siClaudecode,
+  copilot: siGithubcopilot,
+  kimi: siKimi,
   spotify: siSpotify,
   chrome: siGooglechrome,
   firefox: siFirefoxbrowser,
@@ -82,6 +93,10 @@ interface Props {
 }
 
 export function Marca({ marca, tamanho = 18, monocromatica = false }: Props) {
+  if (marca === "codex" || marca === "antigravity") {
+    const colorida = MARCAS_COLORIDAS[marca];
+    return <img src={colorida.url} alt={colorida.title} width={tamanho} height={tamanho} draggable={false} style={{ flex: "0 0 auto", filter: monocromatica ? "grayscale(1) brightness(1.4)" : undefined }} />;
+  }
   const icone = MARCAS[marca];
   const cor = monocromatica || escura(icone.hex) ? "currentColor" : `#${icone.hex}`;
   return (

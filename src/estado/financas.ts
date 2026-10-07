@@ -35,6 +35,8 @@ export const CATEGORIAS_PADRAO: Omit<Categoria, "id">[] = [
   { nome: "Outras receitas", cor: "#0ea5a4", orcamento: 0, tipo: "receita" },
 ];
 
+export const CORES_CATEGORIA = ["#e0803b", "#2f9e6b", "#3b6fe0", "#8b5cf6", "#e05a8a", "#d9922b", "#0ea5a4", "#64748b", "#8a05be", "#c2410c"];
+
 export interface DadosFinancas {
   contas: Conta[];
   categorias: Categoria[];
@@ -60,7 +62,9 @@ interface EstadoFinancas extends DadosFinancas {
   atualizarConta: (id: string, parcial: Partial<Conta>) => void;
   excluirConta: (id: string) => void;
   criarCategoria: (dados: Omit<Categoria, "id">) => Categoria;
+  obterOuCriarCategoria: (nome: string, tipo: Categoria["tipo"]) => Categoria;
   atualizarCategoria: (id: string, parcial: Partial<Categoria>) => void;
+  excluirCategoria: (id: string, destinoId: string) => void;
   lancar: (dados: NovaTransacao) => Transacao[];
   atualizarTransacao: (id: string, parcial: Partial<Transacao>) => void;
   excluirTransacao: (id: string) => Transacao[];
@@ -84,7 +88,7 @@ interface EstadoFinancas extends DadosFinancas {
   adicionarItens: (listaId: string, itens: Omit<ItemCompra, "id" | "marcado">[]) => void;
   atualizarItem: (listaId: string, itemId: string, parcial: Partial<ItemCompra>) => void;
   removerItem: (listaId: string, itemId: string) => void;
-  finalizarCompra: (listaId: string, contaId: string, totalReal: number) => void;
+  finalizarCompra: (listaId: string, contaId: string, totalReal: number, categoriaId?: string) => void;
   criarRegra: (contem: string, categoriaId: string) => void;
   excluirRegra: (id: string) => void;
   categorizar: (descricao: string) => string | undefined;
@@ -133,7 +137,27 @@ export const useFinancas = create<EstadoFinancas>()(
         set((s) => ({ categorias: [...s.categorias, categoria] }));
         return categoria;
       },
+      obterOuCriarCategoria: (nome, tipo) => {
+        const alvo = normalizarTexto(nome.trim());
+        const existente = get().categorias.find((c) => c.tipo === tipo && normalizarTexto(c.nome) === alvo);
+        if (existente) return existente;
+        const cor = CORES_CATEGORIA[get().categorias.length % CORES_CATEGORIA.length];
+        return get().criarCategoria({ nome, cor, orcamento: 0, tipo });
+      },
       atualizarCategoria: (id, parcial) => set((s) => ({ categorias: s.categorias.map((c) => (c.id === id ? { ...c, ...parcial } : c)) })),
+      excluirCategoria: (id, destinoId) =>
+        set((s) => {
+          if (id === destinoId || !s.categorias.some((c) => c.id === destinoId)) return s;
+          const trocar = <X extends { categoriaId?: string }>(x: X): X => (x.categoriaId === id ? { ...x, categoriaId: destinoId } : x);
+          return {
+            categorias: s.categorias.filter((c) => c.id !== id),
+            transacoes: s.transacoes.map(trocar),
+            recorrentes: s.recorrentes.map(trocar),
+            divisoes: s.divisoes.map(trocar),
+            listas: s.listas.map(trocar),
+            regras: s.regras.map((r) => (r.categoriaId === id ? { ...r, categoriaId: destinoId } : r)),
+          };
+        }),
       lancar: ({ parcelas = 1, ...dados }) => {
         const total = Math.max(1, Math.min(48, Math.round(parcelas)));
         const grupo = total > 1 ? gerarId() : undefined;
@@ -277,7 +301,7 @@ export const useFinancas = create<EstadoFinancas>()(
         })),
       removerItem: (listaId, itemId) =>
         set((s) => ({ listas: s.listas.map((l) => (l.id === listaId ? { ...l, itens: l.itens.filter((i) => i.id !== itemId) } : l)) })),
-      finalizarCompra: (listaId, contaId, totalReal) => {
+      finalizarCompra: (listaId, contaId, totalReal, categoriaId) => {
         const lista = get().listas.find((l) => l.id === listaId);
         if (!lista) return;
         const marcados = lista.itens.filter((i) => i.marcado);
@@ -287,7 +311,7 @@ export const useFinancas = create<EstadoFinancas>()(
           tipo: "despesa",
           valor: totalReal,
           descricao: T.financas.compraDescricao(lista.nome),
-          categoriaId: lista.categoriaId,
+          categoriaId: categoriaId ?? lista.categoriaId,
           contaId,
           data: hoje,
         });
@@ -329,14 +353,33 @@ export const useFinancas = create<EstadoFinancas>()(
   ),
 );
 
+function vencimentoAnual(ano: number, mesAnual: number, dia: number): Date {
+  const mes = new Date(ano, mesAnual - 1, 1);
+  return setDate(mes, Math.min(dia, getDaysInMonth(mes)));
+}
+
+/** Marca como já gerado o vencimento do período atual que já passou, para não lançar cobrança retroativa ao criar. */
+export function geradoAteInicial(r: Pick<Recorrente, "dia" | "frequencia" | "mesAnual">, hoje: Date): string | undefined {
+  const vencimento = r.frequencia === "anual" && r.mesAnual ? vencimentoAnual(hoje.getFullYear(), r.mesAnual, r.dia) : setDate(hoje, Math.min(r.dia, getDaysInMonth(hoje)));
+  return paraISO(vencimento) <= paraISO(hoje) ? paraISO(vencimento) : undefined;
+}
+
+function proximoVencimento(r: Recorrente, geradoAte: string): Date {
+  if (r.frequencia !== "anual") return addMonths(deISO(geradoAte), 1);
+  if (!r.mesAnual) return addMonths(deISO(geradoAte), 12);
+  const ultimo = deISO(geradoAte);
+  const desteAno = vencimentoAnual(ultimo.getFullYear(), r.mesAnual, r.dia);
+  return desteAno > ultimo ? desteAno : vencimentoAnual(ultimo.getFullYear() + 1, r.mesAnual, r.dia);
+}
+
 function vencimentosAte(r: Recorrente, hoje: string): string[] {
   const resultado: string[] = [];
   const fim = deISO(hoje);
-  let cursor = r.geradoAte ? addMonths(deISO(r.geradoAte), r.frequencia === "anual" ? 12 : 1) : deISO(hoje);
+  let cursor = r.geradoAte ? proximoVencimento(r, r.geradoAte) : deISO(hoje);
   if (!r.geradoAte) {
     const dia = Math.min(r.dia, getDaysInMonth(cursor));
     cursor = setDate(cursor, dia);
-    if (r.frequencia === "anual" && r.mesAnual) cursor = new Date(cursor.getFullYear(), r.mesAnual - 1, Math.min(r.dia, 28));
+    if (r.frequencia === "anual" && r.mesAnual) cursor = vencimentoAnual(cursor.getFullYear(), r.mesAnual, r.dia);
     if (cursor > fim) return [];
   }
   let protecao = 0;
@@ -420,7 +463,7 @@ export function saldosComPessoas(s: Pick<DadosFinancas, "pessoas" | "divisoes" |
   return saldos;
 }
 
-export function simplificarDividas(s: Pick<DadosFinancas, "pessoas" | "divisoes">): { de: string; para: string; valor: number }[] {
+export function simplificarDividas(s: Pick<DadosFinancas, "pessoas" | "divisoes" | "acertos">): { de: string; para: string; valor: number }[] {
   const liquido = new Map<string, number>();
   const somar = (id: string, v: number) => liquido.set(id, (liquido.get(id) ?? 0) + v);
   for (const d of s.divisoes) {
@@ -429,6 +472,11 @@ export function simplificarDividas(s: Pick<DadosFinancas, "pessoas" | "divisoes"
       somar(d.pagadorId, parte.valor);
       somar(parte.pessoaId, -parte.valor);
     }
+  }
+  // Acerto positivo: a pessoa pagou o usuário; negativo: o usuário pagou a pessoa.
+  for (const a of s.acertos) {
+    somar(a.pessoaId, a.valor);
+    somar(EU, -a.valor);
   }
   const credores = [...liquido].filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   const devedores = [...liquido].filter(([, v]) => v < 0).map(([k, v]) => [k, -v] as [string, number]).sort((a, b) => b[1] - a[1]);

@@ -37,8 +37,11 @@
   --escala: 1;
 }
 
-[data-tema="claro"] {
+/* Ilha, barra e dock têm fundo próprio: os tokens seguem o fundo escolhido, não o tema do app. */
+[data-tema="claro"],
+[data-fundo-claro] {
   color-scheme: light;
+  --cor-organizador: #1c1c1e;
   --fundo: #f6f6f5;
   --superficie: #ffffff;
   --superficie-2: #f1f1f0;
@@ -49,13 +52,18 @@
   --texto-3: #9a9a98;
   --primario: #111111;
   --primario-texto: #ffffff;
+  --botao-primario: var(--primario);
+  --botao-primario-hover: #2a2a2a;
+  --botao-primario-texto: var(--primario-texto);
+  --botao-primario-borda: transparent;
   --sucesso: #2f9e6b;
   --alerta: #d9922b;
   --erro: #d84b4b;
   --foco: rgba(124, 92, 224, 0.35);
 }
 
-[data-tema="escuro"] {
+[data-tema="escuro"],
+[data-fundo-escuro] {
   color-scheme: dark;
   --fundo: #0e0e10;
   --superficie: #161618;
@@ -67,6 +75,10 @@
   --texto-3: #6b6b72;
   --primario: #f2f2f2;
   --primario-texto: #111111;
+  --botao-primario: color-mix(in srgb, #ffffff 13%, var(--superficie));
+  --botao-primario-hover: color-mix(in srgb, #ffffff 19%, var(--superficie));
+  --botao-primario-texto: var(--texto);
+  --botao-primario-borda: rgba(255, 255, 255, 0.09);
   --sucesso: #3dd68c;
   --alerta: #f5b651;
   --erro: #ff6b6b;

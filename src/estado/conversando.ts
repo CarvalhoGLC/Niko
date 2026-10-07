@@ -3,7 +3,7 @@ import type { AgenteId, CartaoConfirmacao, Mensagem } from "../tipos";
 import { useComunicacao } from "./comunicacao";
 import { useAgentes } from "./agentes";
 import { useConfig } from "./configuracoes";
-import { executarComando, confirmarComando } from "../utilitarios/comandos";
+import { executarComando, confirmarComando, faltaCategoria } from "../utilitarios/comandos";
 import { detectarIntencao } from "../utilitarios/intencoes";
 import { resumoPorAgente } from "../utilitarios/contextoIa";
 import { acharMencao, escolherAgente, historicoParaIa, perguntarAssistente, provedoresEmOrdem, mensagemDeErroIa } from "../utilitarios/assistente";
@@ -88,7 +88,7 @@ async function perguntar(conversaId: string, pedido: string, agente: AgenteId, r
   const avisoConfirmacao = r.confirmacoes.length ? T.chat.ferramentas.confira(r.confirmacoes.length) : "";
   for (let i = 0; i < r.confirmacoes.length; i++) {
     const c = r.confirmacoes[i];
-    if (!automaticas.includes(c.tipo) || c.tipo === "email" || c.tipo === "rascunho") continue;
+    if (!automaticas.includes(c.tipo) || c.tipo === "email" || c.tipo === "rascunho" || faltaCategoria(c)) continue;
     const resultado = await confirmarComando(c);
     const falhou = resultado === T.chat.respostas.naoAchei || resultado === T.chat.respostas.semConta;
     r.texto += `\n\n${resultado}`;
@@ -247,10 +247,21 @@ export async function usarSugestao(conversaId: string, comando: string) {
   await responder(conversaId, r.agente, r.resposta, { confirmacao: r.confirmacao }, 120);
 }
 
+export function alterarDadosDoCartao(conversaId: string, mensagem: Mensagem, indice: number | null, dados: CartaoConfirmacao["dados"]) {
+  const com = useComunicacao.getState();
+  const atual = com.conversas.find((c) => c.id === conversaId)?.mensagens.find((m) => m.id === mensagem.id) ?? mensagem;
+  if (indice === null) {
+    if (atual.confirmacao) com.atualizarMensagem(conversaId, mensagem.id, { confirmacao: { ...atual.confirmacao, dados: { ...atual.confirmacao.dados, ...dados } } });
+  } else if (atual.confirmacoes) {
+    com.atualizarMensagem(conversaId, mensagem.id, { confirmacoes: atual.confirmacoes.map((c, i) => (i === indice ? { ...c, dados: { ...c.dados, ...dados } } : c)) });
+  }
+}
+
 export async function decidirCartao(conversaId: string, mensagem: Mensagem, indice: number | null, aceitar: boolean) {
   const com = useComunicacao.getState();
   const cartao: CartaoConfirmacao | undefined = indice === null ? mensagem.confirmacao : mensagem.confirmacoes?.[indice];
   if (!cartao || cartao.situacao !== "pendente") return;
+  if (aceitar && faltaCategoria(cartao)) return;
   const novo: CartaoConfirmacao = { ...cartao, situacao: aceitar ? "confirmado" : "cancelado" };
   const resposta = aceitar ? await confirmarComando(cartao) : T.chat.cancelado;
   if (indice === null) com.atualizarMensagem(conversaId, mensagem.id, { confirmacao: novo });

@@ -1,16 +1,20 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
+use tauri::{AppHandle, Manager, WebviewWindow};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::UI::Shell::{SHAppBarMessage, ABE_BOTTOM, ABM_GETSTATE, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, ABM_SETSTATE, ABS_AUTOHIDE, APPBARDATA};
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, FindWindowW, IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOWNA, WM_APP};
 
-use crate::ALTURA_DOCK;
-
 static OCULTA: AtomicBool = AtomicBool::new(false);
+
+pub fn barra_oculta() -> bool {
+    OCULTA.load(Ordering::SeqCst)
+}
 
 fn arquivo_recuperacao(app: &AppHandle) -> Option<PathBuf> {
     let pasta = app.path().app_data_dir().ok()?;
@@ -62,18 +66,7 @@ fn reposicionar_dock(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(400));
-        let Some(dock) = app.get_webview_window("dock") else { return };
-        let Ok(Some(monitor)) = dock.current_monitor() else { return };
-        let escala = monitor.scale_factor();
-        let (posicao, tamanho) = if OCULTA.load(Ordering::SeqCst) {
-            (*monitor.position(), *monitor.size())
-        } else {
-            let area = monitor.work_area();
-            (area.position, area.size)
-        };
-        let altura = (ALTURA_DOCK * escala).round() as i32;
-        let _ = dock.set_size(PhysicalSize::new(tamanho.width, altura as u32));
-        let _ = dock.set_position(PhysicalPosition::new(posicao.x, posicao.y + tamanho.height as i32 - altura));
+        crate::docks::reposicionar_todos(&app);
     });
 }
 
@@ -121,11 +114,10 @@ pub fn restaurar(app: &AppHandle) {
     reposicionar_dock(app);
 }
 
-static RESERVADO: AtomicBool = AtomicBool::new(false);
+static RESERVADOS: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
 const ALTURA_RESERVADA_DOCK: f64 = 62.0;
 
-fn dados_do_dock(app: &AppHandle) -> Option<(APPBARDATA, tauri::Monitor)> {
-    let dock = app.get_webview_window("dock")?;
+fn dados_do_dock(dock: &WebviewWindow) -> Option<(APPBARDATA, tauri::Monitor)> {
     let janela = dock.hwnd().ok()?;
     let monitor = dock.current_monitor().ok()??;
     let dados = APPBARDATA {
@@ -138,17 +130,20 @@ fn dados_do_dock(app: &AppHandle) -> Option<(APPBARDATA, tauri::Monitor)> {
     Some((dados, monitor))
 }
 
-pub fn reservar_espaco_do_dock(app: &AppHandle, reservar: bool) {
-    let Some((mut dados, monitor)) = dados_do_dock(app) else { return };
+pub fn reservar_espaco_do_dock(dock: &WebviewWindow, reservar: bool) {
+    let Some((mut dados, monitor)) = dados_do_dock(dock) else { return };
+    let Ok(mut guarda) = RESERVADOS.lock() else { return };
+    let reservados = guarda.get_or_insert_with(HashSet::new);
+    let chave = dados.hWnd.0 as isize;
     if !reservar {
-        if RESERVADO.swap(false, Ordering::SeqCst) {
+        if reservados.remove(&chave) {
             unsafe {
                 SHAppBarMessage(ABM_REMOVE, &mut dados);
             }
         }
         return;
     }
-    if !RESERVADO.swap(true, Ordering::SeqCst) {
+    if reservados.insert(chave) {
         unsafe {
             SHAppBarMessage(ABM_NEW, &mut dados);
         }
@@ -165,8 +160,8 @@ pub fn reservar_espaco_do_dock(app: &AppHandle, reservar: bool) {
     }
 }
 #[tauri::command]
-pub fn reservar_dock(app: AppHandle, reservar: bool) {
-    reservar_espaco_do_dock(&app, reservar);
+pub fn reservar_dock(window: WebviewWindow, reservar: bool) {
+    reservar_espaco_do_dock(&window, reservar);
 }
 
 #[tauri::command]

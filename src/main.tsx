@@ -17,8 +17,16 @@ import { T } from "./textos/textos";
 
 document.documentElement.dataset.tema = "claro";
 
+const SELETOR_DAS_SOBREPOSTAS = ".ilha-raiz, .ilha-gatilho, .ilha-barra, .ilha-pop, .dock, .dock-gatilho, .dock-previa";
+
 async function iniciar() {
-  if (JANELA === "ilha" || JANELA === "dock") document.documentElement.classList.add("janela-sobreposta");
+  const sobreposta = JANELA === "ilha" || JANELA === "dock";
+  if (sobreposta) document.documentElement.classList.add("janela-sobreposta");
+  document.addEventListener("contextmenu", (e) => {
+    const alvo = e.target as HTMLElement | null;
+    if (alvo?.closest("input, textarea, [contenteditable='true']")) return;
+    if (sobreposta || alvo?.closest(SELETOR_DAS_SOBREPOSTAS)) e.preventDefault();
+  });
   await prepararPonte();
   desviarLinksExternos();
   let modo = "local";

@@ -13,7 +13,7 @@ import { useAgentes } from "../estado/agentes";
 import { sistema } from "../ponte/ponteLocal";
 import { hojeISO, diaDoMomento, paraISO } from "./datas";
 import { somar, normalizarTexto } from "./basicos";
-import { acharPorNome, categoriaPelaDescricao } from "./comandos";
+import { acharPorNome, dadosDeCategoria } from "./comandos";
 import { T } from "../textos/textos";
 import { lerPomodoro, controlarPomodoro, gerarRelatorioSemanal, textoPomodoro, textoRelatorioSemanal } from "./recursosChat";
 import { listarArquivos, lerConteudo } from "../ponte/arquivos";
@@ -302,6 +302,10 @@ const FERRAMENTAS: FerramentaNiko[] = [
           categorias: fin.categorias
             .filter((c) => c.tipo === "despesa" && (porCategoria.get(c.id) || c.orcamento))
             .map((c) => ({ nome: c.nome, gasto: reais(porCategoria.get(c.id) ?? 0), orcamento: reais(c.orcamento) })),
+          categorias_disponiveis: {
+            despesa: fin.categorias.filter((c) => c.tipo === "despesa").map((c) => c.nome),
+            receita: fin.categorias.filter((c) => c.tipo === "receita").map((c) => c.nome),
+          },
           ultimos: [...fin.transacoes].filter((t) => t.data.startsWith(mes)).sort((x, y) => y.data.localeCompare(x.data)).slice(0, 12).map((t) => ({ data: t.data, tipo: t.tipo, valor: reais(t.valor), descricao: t.descricao })),
           metas_economia: fin.metasEconomia.map((m) => ({ nome: m.nome, guardado: reais(m.guardado), alvo: reais(m.alvo), prazo: m.prazo ?? null })),
         },
@@ -525,11 +529,19 @@ const FERRAMENTAS: FerramentaNiko[] = [
   {
     definicao: {
       nome: "lancar_transacao",
-      descricao: "Prepara um gasto ou uma receita. Valor em reais. O usuário confirma antes de salvar.",
+      descricao:
+        "Prepara um gasto ou uma receita. Valor em reais. O usuário confirma antes de salvar. Todo lançamento precisa de categoria: use o nome exato de uma categoria existente (veja categorias_disponiveis em ler_financas). Se o usuário não disse a categoria e ela não é óbvia pela descrição, NÃO chame ainda: pergunte em qual categoria vai, sugerindo as existentes ou a criação de uma nova. Um nome que ainda não existe vira uma categoria nova quando o usuário confirmar.",
       parametros: {
         type: "object",
-        properties: { tipo: { type: "string", enum: ["despesa", "receita"] }, valor: { type: "number", minimum: 0.01 }, descricao: { type: "string" }, categoria: { type: "string" }, conta: { type: "string" }, data: DATA },
-        required: ["tipo", "valor", "descricao"],
+        properties: {
+          tipo: { type: "string", enum: ["despesa", "receita"] },
+          valor: { type: "number", minimum: 0.01 },
+          descricao: { type: "string" },
+          categoria: { type: "string", description: "Nome da categoria existente, ou o nome da nova categoria que o usuário pediu" },
+          conta: { type: "string" },
+          data: DATA,
+        },
+        required: ["tipo", "valor", "descricao", "categoria"],
       },
     },
     executar: (a) => {
@@ -542,9 +554,8 @@ const FERRAMENTAS: FerramentaNiko[] = [
       const tipo = a.tipo === "receita" ? "receita" : "gasto";
       const descricao = texto(a.descricao, 120) || (tipo === "gasto" ? T.financas.tipos.despesa : T.financas.tipos.receita);
       const categorias = useFinancas.getState().categorias.filter((c) => c.tipo === (tipo === "gasto" ? "despesa" : "receita"));
-      const categoria = acharPorNome(categorias, texto(a.categoria, 60) || undefined) ?? categorias.find((c) => c.id === fin.categorizar(descricao)) ?? categoriaPelaDescricao(categorias, descricao);
       const conta = acharPorNome(contas, texto(a.conta, 60) || undefined) ?? contas[0];
-      return { tipo: "confirmar", agente: "operador", cartao: { tipo, situacao: "pendente", dados: { valor, descricao, categoriaId: categoria?.id ?? "", contaId: conta.id, data: dataValida(a.data) ?? hojeISO() } } };
+      return { tipo: "confirmar", agente: "operador", cartao: { tipo, situacao: "pendente", dados: { valor, descricao, ...dadosDeCategoria(categorias, texto(a.categoria, 60) || undefined, descricao), contaId: conta.id, data: dataValida(a.data) ?? hojeISO() } } };
     },
   },
   {

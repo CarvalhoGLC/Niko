@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WebviewWindow};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY};
 use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN};
@@ -23,6 +23,8 @@ pub struct EstadoDaFrente {
     tela_cheia: bool,
     maximizada: bool,
     frente: TipoDaFrente,
+    #[serde(skip)]
+    outro_monitor: bool,
 }
 
 fn windows_em_tela_cheia() -> bool {
@@ -49,7 +51,7 @@ fn e_janela_do_sistema(app: &AppHandle, janela: HWND) -> bool {
     app.get_webview_window("sistema").and_then(|j| j.hwnd().ok()).map(|h| h.0 == janela.0).unwrap_or(false)
 }
 
-unsafe fn ler_janela_da_frente(app: &AppHandle) -> EstadoDaFrente {
+unsafe fn ler_janela_da_frente(app: &AppHandle, monitor_alvo: HMONITOR) -> EstadoDaFrente {
     let frente = GetForegroundWindow();
     if frente.is_invalid() {
         return EstadoDaFrente::default();
@@ -69,17 +71,21 @@ unsafe fn ler_janela_da_frente(app: &AppHandle) -> EstadoDaFrente {
         return EstadoDaFrente::default();
     }
     let monitor = MonitorFromWindow(frente, MONITOR_DEFAULTTONEAREST);
-    if monitor != MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) {
-        return EstadoDaFrente { frente: TipoDaFrente::App, ..Default::default() };
+    if monitor != monitor_alvo {
+        return EstadoDaFrente { frente: TipoDaFrente::App, outro_monitor: true, ..Default::default() };
     }
     let maximizada = IsZoomed(frente).as_bool();
     let cobre_monitor = retangulo_cobre_monitor(frente, monitor);
-    EstadoDaFrente { cobre: maximizada || cobre_monitor, tela_cheia: !maximizada && cobre_monitor, maximizada, frente: TipoDaFrente::App }
+    EstadoDaFrente { cobre: maximizada || cobre_monitor, tela_cheia: !maximizada && cobre_monitor, maximizada, frente: TipoDaFrente::App, outro_monitor: false }
 }
 
 #[tauri::command]
-pub fn frente_cobre_tela(app: AppHandle) -> EstadoDaFrente {
-    let janela = unsafe { ler_janela_da_frente(&app) };
-    let tela_cheia = janela.tela_cheia || windows_em_tela_cheia();
-    EstadoDaFrente { cobre: janela.cobre || tela_cheia, tela_cheia, maximizada: janela.maximizada, frente: if tela_cheia { TipoDaFrente::App } else { janela.frente } }
+pub fn frente_cobre_tela(app: AppHandle, window: WebviewWindow) -> EstadoDaFrente {
+    let monitor_alvo = match window.hwnd() {
+        Ok(h) => unsafe { MonitorFromWindow(HWND(h.0), MONITOR_DEFAULTTONEAREST) },
+        Err(_) => unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) },
+    };
+    let janela = unsafe { ler_janela_da_frente(&app, monitor_alvo) };
+    let tela_cheia = janela.tela_cheia || (!janela.outro_monitor && windows_em_tela_cheia());
+    EstadoDaFrente { cobre: janela.cobre || tela_cheia, tela_cheia, maximizada: janela.maximizada, frente: if tela_cheia { TipoDaFrente::App } else { janela.frente }, outro_monitor: janela.outro_monitor }
 }

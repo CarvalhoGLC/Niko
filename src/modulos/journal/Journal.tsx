@@ -298,7 +298,7 @@ export default function Journal() {
             <Botao pequeno icone={<ChevronRight size={13} />} onClick={() => setData(paraISO(addDays(deISO(data), 1)))}>{T.geral.proximo}</Botao>
             <Botao pequeno soIcone variante="fantasma" icone={<Undo2 size={14} />} aria-label={T.geral.desfazer} title={`${T.geral.desfazer} (Ctrl + Z)`} disabled={!podeDesfazer} onClick={desfazer} />
             <Botao pequeno soIcone variante="fantasma" icone={<Redo2 size={14} />} aria-label={T.geral.refazer} title={`${T.geral.refazer} (Ctrl + Shift + Z)`} disabled={!podeRefazer} onClick={refazer} />
-            <Botao pequeno variante="fantasma" icone={<Printer size={13} />} onClick={() => { if (!imprimirMes(mes)) avisar(T.journal.impressao.bloqueada); }}>{T.journal.imprimirMes}</Botao>
+            <Botao pequeno variante="fantasma" icone={<Printer size={13} />} onClick={() => imprimirMes(mes, () => avisar(T.journal.impressao.falhou))}>{T.journal.imprimirMes}</Botao>
             {virada && <span className="etiqueta">{T.journal.viradaAtiva}</span>}
             <span className="etiqueta etiqueta-sucesso" style={{ opacity: salvo ? 1 : 0, transition: "opacity 0.3s" }} aria-live="polite">{T.geral.salvo}</span>
           </>

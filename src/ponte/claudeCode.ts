@@ -1,6 +1,22 @@
+export type FerramentaDeCodigo = "claude" | "codex" | "copilot" | "opencode" | "antigravity" | "kimi";
+
+export const FERRAMENTAS_DE_CODIGO: FerramentaDeCodigo[] = ["claude", "codex", "copilot", "opencode", "antigravity", "kimi"];
+
+export const FERRAMENTAS_QUE_APROVAM: FerramentaDeCodigo[] = ["claude", "codex", "copilot"];
+
+export interface EstadoDaFerramenta {
+  id: FerramentaDeCodigo;
+  caminho: string;
+  detectado: boolean;
+  instalado: boolean;
+  desatualizado: boolean;
+  invalido: boolean;
+}
+
 export interface EventoClaude {
   id: string;
   recebidoEm: string;
+  ferramenta?: FerramentaDeCodigo;
   evento: string;
   sessao: string;
   cwd: string;
@@ -47,6 +63,19 @@ export const claudeCode = {
   remover: () => pedir<{ caminho: string; copia: string | null }>("remover", { method: "POST", body: JSON.stringify({ confirmacao: "REMOVER" }) }),
   decidir: (pedidoId: string, decisao: "allow" | "deny" | "terminal", regra?: RegraSugerida) => pedir<{ ok: boolean }>("decisao", { method: "POST", body: JSON.stringify({ pedidoId, decisao, regra }) }),
   abrir: (cwd: string, como: "vscode" | "pasta") => pedir<{ ok: boolean }>("abrir", { method: "POST", body: JSON.stringify({ cwd, como }) }),
+};
+
+async function pedirAgentes<T>(caminho: string, opcoes: RequestInit = {}): Promise<T> {
+  const r = await fetch(`/ponte/agentes${caminho}`, { ...opcoes, headers: CABECALHOS });
+  const json = (await r.json().catch(() => ({}))) as T & { erro?: string };
+  if (!r.ok) throw new Error(json.erro ?? `http_${r.status}`);
+  return json;
+}
+
+export const agentesDeCodigo = {
+  estado: () => pedirAgentes<{ ferramentas: EstadoDaFerramenta[] }>(""),
+  instalar: (id: FerramentaDeCodigo) => pedirAgentes<{ caminho: string; copia: string | null }>(`/${id}/instalar`, { method: "POST", body: JSON.stringify({ confirmacao: "INSTALAR" }) }),
+  remover: (id: FerramentaDeCodigo) => pedirAgentes<{ caminho: string; copia: string | null }>(`/${id}/remover`, { method: "POST", body: JSON.stringify({ confirmacao: "REMOVER" }) }),
 };
 
 export function ouvirClaudeCode(aoReceber: (e: EventoClaude) => void, aoMudarConexao: (ligado: boolean) => void): () => void {

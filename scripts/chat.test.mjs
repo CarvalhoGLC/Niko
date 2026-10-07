@@ -337,6 +337,109 @@ test("ajuda e conquistas escondem o que pertence a funções desligadas", async 
   assert.ok(!ajuda.includes("/tarefa"));
   assert.ok(!conquistaLigada("meta_economia"));
   assert.ok(conquistaLigada("foco"));
-  for (const aba of ["hoje", "habitos", "calendario"]) assert.ok(!abaLigada(aba), aba);
+  assert.ok(!abaLigada("hoje"));
   assert.ok(abaLigada("midia"));
+});
+
+test("aba Hoje da ilha mostra só as seções das funções ligadas", async () => {
+  const { abaLigada, secoesDoHojeLigadas } = await servidor.ssrLoadModule("/src/utilitarios/funcoes.ts");
+  assert.deepEqual(secoesDoHojeLigadas([]), ["agenda", "tarefas", "habitos"]);
+  assert.deepEqual(secoesDoHojeLigadas(["journal"]), ["agenda"]);
+  assert.deepEqual(secoesDoHojeLigadas(["calendario"]), ["tarefas", "habitos"]);
+  assert.ok(abaLigada("hoje", ["journal"]));
+  assert.ok(!abaLigada("hoje", ["journal", "calendario"]));
+});
+
+test("abas antigas de Calendário, Hábitos e Capturar viram a aba Hoje sem perder a ordem", async () => {
+  const { juntarAbasNoHoje } = await servidor.ssrLoadModule("/src/estado/configuracoes.ts");
+  const ordem = ["calendario", "claude", "conexoes", "chat", "hoje", "captura", "midia", "foco", "habitos", "avisos"];
+  const blocos = { calendario: true, hoje: false, captura: true, midia: true, foco: false, habitos: false, chat: true, conexoes: true, avisos: true, claude: true };
+  const r = juntarAbasNoHoje(ordem, blocos);
+  assert.deepEqual(r.ordemAbas, ["hoje", "claude", "conexoes", "chat", "midia", "foco", "avisos"]);
+  assert.equal(r.blocos.hoje, true);
+  assert.equal(r.blocos.foco, false);
+  assert.ok(!("calendario" in r.blocos) && !("habitos" in r.blocos) && !("captura" in r.blocos));
+  assert.equal(juntarAbasNoHoje(["chat", "habitos", "calendario"], { hoje: false, calendario: false, habitos: false }).blocos.hoje, false);
+  assert.deepEqual(juntarAbasNoHoje(["chat", "habitos", "calendario"], {}).ordemAbas, ["chat", "hoje"]);
+  assert.deepEqual(juntarAbasNoHoje(["conexoes", "chat", "calendario", "midia"], {}).ordemAbas, ["hoje", "conexoes", "chat", "midia"]);
+  assert.deepEqual(
+    juntarAbasNoHoje(["conexoes", "chat", "hoje", "midia", "foco", "avisos", "claude", "calendario", "captura", "habitos"], {}).ordemAbas,
+    ["hoje", "conexoes", "chat", "midia", "foco", "avisos", "claude"],
+  );
+});
+
+async function financasDeTeste() {
+  const { useFinancas } = await servidor.ssrLoadModule("/src/estado/financas.ts");
+  useFinancas.setState({ contas: [{ id: "c1", nome: "Conta", tipo: "corrente", saldoInicial: 0, cor: "#000", arquivada: false }], categorias: [], transacoes: [], recorrentes: [], regras: [], divisoes: [], listas: [] });
+  return useFinancas;
+}
+
+test("gasto sem categoria não é salvo até o usuário escolher", async () => {
+  const useFinancas = await financasDeTeste();
+  const { confirmarComando, faltaCategoria } = await servidor.ssrLoadModule("/src/utilitarios/comandos.ts");
+  const r = executarComando("/gasto 30 presente da Ana");
+  assert.ok(faltaCategoria(r.confirmacao));
+  assert.equal(confirmarComando(r.confirmacao), T.chat.respostas.faltaCategoria);
+  assert.equal(useFinancas.getState().transacoes.length, 0);
+  const lazer = useFinancas.getState().categorias.find((c) => c.nome === "Lazer");
+  confirmarComando({ ...r.confirmacao, dados: { ...r.confirmacao.dados, categoriaId: lazer.id } });
+  assert.equal(useFinancas.getState().transacoes[0].categoriaId, lazer.id);
+});
+
+test("categoria nova pedida no chat é criada só na confirmação e sem duplicar", async () => {
+  const useFinancas = await financasDeTeste();
+  const { confirmarComando, faltaCategoria } = await servidor.ssrLoadModule("/src/utilitarios/comandos.ts");
+  const r = executarComando("/gasto 18 bolo #confeitaria");
+  assert.equal(r.confirmacao.dados.novaCategoria, "confeitaria");
+  assert.ok(!faltaCategoria(r.confirmacao));
+  assert.ok(!useFinancas.getState().categorias.some((c) => c.nome === "confeitaria"));
+  confirmarComando(r.confirmacao);
+  confirmarComando(executarComando("/gasto 9 torta #Confeitaria").confirmacao);
+  const criadas = useFinancas.getState().categorias.filter((c) => c.nome.toLowerCase() === "confeitaria");
+  assert.equal(criadas.length, 1);
+  assert.ok(useFinancas.getState().transacoes.every((t) => t.categoriaId === criadas[0].id));
+});
+
+test("aprovação automática não salva gasto sem categoria", async () => {
+  const useFinancas = await financasDeTeste();
+  useConfig.setState({ nuncaFinanceiro: false, ia: { ...useConfig.getState().ia, autoAprovar: ["gasto"] } });
+  await provedorFalso([[{ tipo: "ferramenta", chamada: { id: "g", nome: "lancar_transacao", argumentos: { tipo: "despesa", valor: 25, descricao: "presente" } } }]]);
+  const c = useComunicacao.getState().criarConversa("operador");
+  await enviarAoTime(c.id, "Consegue registrar aquele presente da Ana?");
+  const resposta = useComunicacao.getState().conversas.find((x) => x.id === c.id).mensagens.at(-1);
+  assert.equal(resposta.confirmacoes[0].situacao, "pendente");
+  assert.equal(useFinancas.getState().transacoes.length, 0);
+});
+
+test("excluir categoria move os lançamentos para a escolhida", async () => {
+  const useFinancas = await financasDeTeste();
+  const f = useFinancas.getState();
+  f.garantirCategorias();
+  const [a, b] = useFinancas.getState().categorias.filter((c) => c.tipo === "despesa");
+  f.lancar({ tipo: "despesa", valor: 100, descricao: "x", categoriaId: a.id, contaId: "c1", data: "2026-10-01" });
+  useFinancas.getState().excluirCategoria(a.id, b.id);
+  assert.ok(!useFinancas.getState().categorias.some((c) => c.id === a.id));
+  assert.equal(useFinancas.getState().transacoes[0].categoriaId, b.id);
+});
+
+test("recorrente anual respeita o mês escolhido, inclusive em registros antigos", async () => {
+  const useFinancas = await financasDeTeste();
+  const { geradoAteInicial } = await servidor.ssrLoadModule("/src/estado/financas.ts");
+  assert.equal(geradoAteInicial({ dia: 5, frequencia: "anual", mesAnual: 3 }, new Date(2026, 9, 6)), "2026-03-05");
+  assert.equal(geradoAteInicial({ dia: 20, frequencia: "anual", mesAnual: 12 }, new Date(2026, 9, 6)), undefined);
+  assert.equal(geradoAteInicial({ dia: 5, frequencia: "mensal" }, new Date(2026, 9, 6)), "2026-10-05");
+  const ano = new Date().getFullYear();
+  useFinancas.setState({ recorrentes: [{ id: "r1", descricao: "Seguro", valor: 1000, dia: 5, frequencia: "anual", mesAnual: 3, contaId: "c1", categoriaId: "x", ativa: true, geradoAte: `${ano - 2}-12-05` }] });
+  useFinancas.getState().gerarRecorrentes();
+  const datas = useFinancas.getState().transacoes.map((t) => t.data);
+  assert.ok(datas.length >= 1);
+  assert.ok(datas.every((d) => d.endsWith("-03-05")), datas.join(","));
+});
+
+test("simplificação de dívidas desconta os acertos", async () => {
+  const { simplificarDividas } = await servidor.ssrLoadModule("/src/estado/financas.ts");
+  const divisoes = [{ id: "d", descricao: "pizza", total: 100, pagadorId: "eu", partes: [{ pessoaId: "eu", valor: 50 }, { pessoaId: "ana", valor: 50 }], data: "2026-10-01" }];
+  assert.deepEqual(simplificarDividas({ pessoas: [], divisoes, acertos: [] }), [{ de: "ana", para: "eu", valor: 50 }]);
+  assert.deepEqual(simplificarDividas({ pessoas: [], divisoes, acertos: [{ id: "a", pessoaId: "ana", valor: 50, data: "2026-10-02" }] }), []);
+  assert.deepEqual(simplificarDividas({ pessoas: [], divisoes, acertos: [{ id: "a", pessoaId: "ana", valor: 20, data: "2026-10-02" }] }), [{ de: "ana", para: "eu", valor: 30 }]);
 });

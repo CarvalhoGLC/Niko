@@ -90,6 +90,9 @@ importers:
         specifier: ^5.0.15
         version: 5.0.15(@types/react@19.3.0)(react@19.3.0)(use-sync-external-store@1.7.0(react@19.3.0))
     devDependencies:
+      '@rolldown/binding-win32-x64-msvc':
+        specifier: ^1.2.12
+        version: 1.2.12
       '@tauri-apps/cli':
         specifier: ^2.12.1
         version: 2.12.1
@@ -1505,8 +1508,7 @@ snapshots:
   '@rolldown/binding-win32-arm64-msvc@1.2.12':
     optional: true
 
-  '@rolldown/binding-win32-x64-msvc@1.2.12':
-    optional: true
+  '@rolldown/binding-win32-x64-msvc@1.2.12': {}
 
   '@rolldown/pluginutils@1.0.1': {}
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronUp, LayoutGrid, ListTodo, Palette, SlidersHorizontal } from "lucide-react";
-import { useConfig, type AbaIlha } from "../../../estado/configuracoes";
+import { useConfig, type AbaIlha, type SecaoHoje } from "../../../estado/configuracoes";
 import { funcaoLigada } from "../../../utilitarios/funcoes";
 import { useRotina, tarefasDoDia } from "../../../estado/rotina";
 import { useControleRapido, usarAudio, usarRede } from "../../../estado/controleRapido";
@@ -16,7 +16,7 @@ import { Personalizacao } from "./Personalizacao";
 import { criarAlternadorDoIniciar } from "./acoesDaBarra";
 import { useIlha } from "../../../estado/ilha";
 import { BateriaDesenhada, IconeDeVolume, IconeDeWifi, wifiLigado } from "./IconesDeStatus";
-import { variaveisDaBorda } from "../../aparencia";
+import { atributosDoFundo, variaveisDaBorda } from "../../aparencia";
 import type { AparenciaDeBorda } from "../../../utilitarios/cores";
 import "./barra.css";
 
@@ -34,7 +34,7 @@ interface PropsBarra {
   escala: number;
   larguraDaIlha: number;
   aparencia: AparenciaDeBorda;
-  aoAbrirAba: (aba: AbaIlha) => void;
+  aoAbrirAba: (aba: AbaIlha, secao?: SecaoHoje) => void;
   aoUsar: (emUso: boolean) => void;
 }
 
@@ -43,9 +43,11 @@ function rotuloDoWifi(rede: EstadoSistema) {
   return rede.wifi.conectado && rede.wifi.ssid ? T.ilha.barra.wifi(rede.wifi.ssid) : T.ilha.barra.wifiSemRede;
 }
 
-function LadoEsquerdo({ pop, alternarPersonalizacao, aoAbrirAba }: { pop: Pop; alternarPersonalizacao: () => void; aoAbrirAba: (aba: AbaIlha) => void }) {
+function LadoEsquerdo({ pop, alternarPersonalizacao, aoAbrirAba }: { pop: Pop; alternarPersonalizacao: () => void; aoAbrirAba: (aba: AbaIlha, secao?: SecaoHoje) => void }) {
   const estadoIlha = useIlha((s) => s.estado);
   const abaIlha = useIlha((s) => s.aba);
+  const secaoHoje = useIlha((s) => s.secaoHoje);
+  const tarefasAbertas = estadoIlha === "expandida" && abaIlha === "hoje" && secaoHoje === "tarefas";
   const iniciar = useRef(criarAlternadorDoIniciar(controle.iniciar, controle.alternarIniciar));
   const relogioIniciar = useRef<number | undefined>(undefined);
   const [iniciarOcupado, setIniciarOcupado] = useState(false);
@@ -97,7 +99,7 @@ function LadoEsquerdo({ pop, alternarPersonalizacao, aoAbrirAba }: { pop: Pop; a
         <LayoutGrid size={14} />
       </button>
       {comTarefas && (
-        <button type="button" className="ilha-barra-botao ilha-barra-texto" title={rotuloTarefas} aria-label={rotuloTarefas} aria-expanded={estadoIlha === "expandida" && abaIlha === "hoje"} data-ativo={estadoIlha === "expandida" && abaIlha === "hoje" || undefined} onClick={() => aoAbrirAba("hoje")}>
+        <button type="button" className="ilha-barra-botao ilha-barra-texto" title={rotuloTarefas} aria-label={rotuloTarefas} aria-expanded={tarefasAbertas} data-ativo={tarefasAbertas || undefined} onClick={() => aoAbrirAba("hoje", "tarefas")}>
           <ListTodo size={13} />
           <span className="numero">{doDia.length ? T.ilha.barra.tarefasHoje(feitas, doDia.length) : "0"}</span>
         </button>
@@ -225,7 +227,7 @@ export function BarraDoTopo({ visivel, escala, larguraDaIlha, aparencia, aoAbrir
           <motion.div
             key="barra"
             className="ilha-barra"
-            data-fundo-claro={aparencia.claro || undefined}
+            {...atributosDoFundo(aparencia)}
             style={{ ...variaveis, height: altura, ["--escala-barra" as string]: escala, ["--faixa" as string]: `${ALTURA_DA_FAIXA}px`, ["--raio-aba" as string]: `${RAIO_DAS_ORELHAS}px` }}
             initial={{ y: "-100%" }}
             animate={{ y: 0 }}
@@ -237,10 +239,11 @@ export function BarraDoTopo({ visivel, escala, larguraDaIlha, aparencia, aoAbrir
               <LadoEsquerdo
                 pop={pop}
                 alternarPersonalizacao={alternarPersonalizacao}
-                aoAbrirAba={(aba) => {
+                aoAbrirAba={(aba, secao) => {
+                  const ilha = useIlha.getState();
                   setPop(null);
-                  void tocarSom(useIlha.getState().estado === "expandida" && useIlha.getState().aba === aba ? "close" : "open");
-                  aoAbrirAba(aba);
+                  void tocarSom(ilha.estado === "expandida" && ilha.aba === aba && (!secao || ilha.secaoHoje === secao) ? "close" : "open");
+                  aoAbrirAba(aba, secao);
                 }}
               />
             </div>
@@ -250,7 +253,7 @@ export function BarraDoTopo({ visivel, escala, larguraDaIlha, aparencia, aoAbrir
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="ilha-pops" data-fundo-claro={aparencia.claro || undefined} style={variaveis}>
+      <div className="ilha-pops" {...atributosDoFundo(aparencia)} style={variaveis}>
         <AnimatePresence>
           {visivel && pop?.tipo === "personalizar" && <Personalizacao key="personalizar" topo={topoDosPops} aoFechar={() => setPop(null)} />}
           {visivel && pop?.tipo === "painel" && <PainelRapido key="painel" topo={topoDosPops} aoFechar={() => setPop(null)} />}

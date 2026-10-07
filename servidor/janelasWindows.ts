@@ -22,7 +22,27 @@ public static class NikoJanelas {
   [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool f);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int a, out int v, int t);
-  public class Info { public long Id; public uint Pid; public string Titulo; public bool Minimizada; public bool Ativa; }
+  [StructLayout(LayoutKind.Sequential)] public struct Retangulo { public int Esquerda, Topo, Direita, Base; }
+  [StructLayout(LayoutKind.Sequential)] public struct Ponto { public int X, Y; }
+  [StructLayout(LayoutKind.Sequential)] public struct Posicionamento { public int Tamanho; public int Flags; public int Mostrar; public Ponto Minimo; public Ponto Maximo; public Retangulo Normal; }
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] public struct InfoDoMonitor { public int Tamanho; public Retangulo Monitor; public Retangulo Trabalho; public uint Flags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string Dispositivo; }
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint f);
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromRect(ref Retangulo r, uint f);
+  [DllImport("user32.dll")] static extern bool GetWindowPlacement(IntPtr h, ref Posicionamento p);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr m, ref InfoDoMonitor i);
+  public class Info { public long Id; public uint Pid; public string Titulo; public bool Minimizada; public bool Ativa; public string Monitor; }
+  static string MonitorDa(IntPtr h) {
+    IntPtr m;
+    if (IsIconic(h)) {
+      var p = new Posicionamento();
+      p.Tamanho = Marshal.SizeOf(p);
+      GetWindowPlacement(h, ref p);
+      m = MonitorFromRect(ref p.Normal, 2);
+    } else m = MonitorFromWindow(h, 2);
+    var i = new InfoDoMonitor();
+    i.Tamanho = Marshal.SizeOf(i);
+    return GetMonitorInfo(m, ref i) ? i.Dispositivo : "";
+  }
   static IntPtr ultimaFrente = IntPtr.Zero;
   static IntPtr FrenteForaDoNiko() {
     IntPtr frente = GetForegroundWindow();
@@ -48,7 +68,7 @@ public static class NikoJanelas {
       GetWindowText(h, sb, 300);
       if (sb.Length == 0) return true;
       uint pid; GetWindowThreadProcessId(h, out pid);
-      lista.Add(new Info { Id = h.ToInt64(), Pid = pid, Titulo = sb.ToString(), Minimizada = IsIconic(h), Ativa = h == frente && !IsIconic(h) });
+      lista.Add(new Info { Id = h.ToInt64(), Pid = pid, Titulo = sb.ToString(), Minimizada = IsIconic(h), Ativa = h == frente && !IsIconic(h), Monitor = MonitorDa(h) });
       return true;
     }, IntPtr.Zero);
     return lista;
@@ -111,7 +131,7 @@ while ($true) {
         }
         $info = $caminhos[$j.Pid]
         if ($info.nome -eq 'niko' -or ($info.nome -eq 'ApplicationFrameHost' -and $j.Titulo -eq '')) { continue }
-        $lista += @{ id = [string]$j.Id; pid = $j.Pid; titulo = $j.Titulo; minimizada = $j.Minimizada; ativa = $j.Ativa; app = $info.nome; nome = $(if ($info.descricao) { $info.descricao } else { $info.nome }); caminho = $info.caminho; icone = (Icone $info.caminho) }
+        $lista += @{ id = [string]$j.Id; pid = $j.Pid; titulo = $j.Titulo; minimizada = $j.Minimizada; ativa = $j.Ativa; app = $info.nome; nome = $(if ($info.descricao) { $info.descricao } else { $info.nome }); caminho = $info.caminho; icone = (Icone $info.caminho); monitor = $j.Monitor }
       }
       $r = @{ janelas = $lista }
     }

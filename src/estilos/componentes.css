@@ -22,12 +22,13 @@
 }
 
 .botao-primario {
-  background: var(--primario);
-  color: var(--primario-texto);
+  background: var(--botao-primario);
+  color: var(--botao-primario-texto);
+  border-color: var(--botao-primario-borda);
 }
 
 .botao-primario:hover:not(:disabled) {
-  opacity: 0.88;
+  background: var(--botao-primario-hover);
 }
 
 .botao-secundario {
@@ -577,15 +578,16 @@
   min-height: 40px;
   padding: var(--esp-2) var(--esp-2) var(--esp-2) var(--esp-4);
   border-radius: var(--raio-campo);
-  background: var(--primario);
-  color: var(--primario-texto);
+  background: var(--botao-primario);
+  color: var(--botao-primario-texto);
+  border: 1px solid var(--botao-primario-borda);
   box-shadow: var(--sombra-menu);
   font-size: 12px;
   max-width: 480px;
 }
 
 .aviso-rodape .botao {
-  color: var(--primario-texto);
+  color: var(--botao-primario-texto);
   height: 28px;
 }
 
@@ -674,8 +676,10 @@
   pointer-events: none;
   padding: var(--esp-1) var(--esp-2);
   border-radius: 6px;
-  background: var(--primario);
-  color: var(--primario-texto);
+  background: var(--botao-primario);
+  color: var(--botao-primario-texto);
+  border: 1px solid var(--botao-primario-borda);
+  box-shadow: var(--sombra-menu);
   font-size: 11px;
   white-space: nowrap;
   transform: translate(-50%, calc(-100% - 8px));

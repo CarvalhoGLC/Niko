@@ -2,19 +2,24 @@ import { useEffect } from "react";
 import { motion } from "motion/react";
 import { Check, ShieldCheck, X } from "lucide-react";
 import type { CartaoConfirmacao, Mensagem } from "../tipos";
-import { linhasDaConfirmacao } from "../utilitarios/comandos";
-import { decidirCartao } from "../estado/conversando";
+import { faltaCategoria, linhasDaConfirmacao, tipoDeCategoriaDoCartao } from "../utilitarios/comandos";
+import { alterarDadosDoCartao, decidirCartao } from "../estado/conversando";
 import { useConfig } from "../estado/configuracoes";
+import { useFinancas } from "../estado/financas";
 import { T } from "../textos/textos";
+import { SeletorDeCategoria } from "./SeletorDeCategoria";
 
 function digitandoEmCampo(e: KeyboardEvent): boolean {
   const alvo = e.target as HTMLElement | null;
-  return !!alvo && (alvo.tagName === "INPUT" || alvo.tagName === "TEXTAREA" || alvo.isContentEditable);
+  return !!alvo && (alvo.tagName === "INPUT" || alvo.tagName === "TEXTAREA" || alvo.tagName === "SELECT" || alvo.isContentEditable);
 }
 
-function Cartao({ cartao, aoDecidir, aoSempre, compacto, atalhos, agenteNome }: { cartao: CartaoConfirmacao; aoDecidir: (aceitar: boolean) => void; aoSempre: () => void; compacto?: boolean; atalhos: boolean; agenteNome: string }) {
+function Cartao({ cartao, aoDecidir, aoSempre, aoMudarDados, compacto, atalhos, agenteNome }: { cartao: CartaoConfirmacao; aoDecidir: (aceitar: boolean) => void; aoSempre: () => void; aoMudarDados: (dados: CartaoConfirmacao["dados"]) => void; compacto?: boolean; atalhos: boolean; agenteNome: string }) {
   const pendente = cartao.situacao === "pendente";
-  const linhas = linhasDaConfirmacao(cartao);
+  useFinancas((s) => s.categorias);
+  const tipoCategoria = tipoDeCategoriaDoCartao(cartao);
+  const semCategoria = faltaCategoria(cartao);
+  const linhas = linhasDaConfirmacao(cartao).filter(([k]) => !(pendente && tipoCategoria && k === T.chat.rotulos.categoria));
 
   useEffect(() => {
     if (!pendente || !atalhos) return;
@@ -52,6 +57,18 @@ function Cartao({ cartao, aoDecidir, aoSempre, compacto, atalhos, agenteNome }: 
           ))}
         </dl>
       )}
+      {pendente && tipoCategoria && (
+        <div className="permissao-categoria" data-falta={semCategoria || undefined}>
+          {semCategoria ? T.financas.categoriaObrigatoria : T.chat.rotulos.categoria}
+          <SeletorDeCategoria
+            tipo={tipoCategoria}
+            categoriaId={String(cartao.dados.categoriaId ?? "")}
+            novaCategoria={String(cartao.dados.novaCategoria ?? "")}
+            invalido={semCategoria}
+            aoMudar={(categoriaId, novaCategoria) => aoMudarDados({ categoriaId, novaCategoria })}
+          />
+        </div>
+      )}
       {pendente && (
         <div className="permissao-botoes">
           <button type="button" className="botao botao-secundario botao-pequeno" onClick={() => aoDecidir(false)}>
@@ -59,12 +76,12 @@ function Cartao({ cartao, aoDecidir, aoSempre, compacto, atalhos, agenteNome }: 
             {T.chat.permissao.recusar}
             {atalhos && <kbd>N</kbd>}
           </button>
-          <button type="button" className="botao botao-primario botao-pequeno" onClick={() => aoDecidir(true)}>
+          <button type="button" className="botao botao-primario botao-pequeno" disabled={semCategoria} title={semCategoria ? T.financas.categoriaObrigatoria : undefined} onClick={() => aoDecidir(true)}>
             <Check size={13} />
             {T.chat.permissao.permitir}
             {atalhos && <kbd>Y</kbd>}
           </button>
-          <button type="button" className="botao botao-fantasma botao-pequeno" title={T.chat.permissao.sempreDica} onClick={aoSempre}>
+          <button type="button" className="botao botao-fantasma botao-pequeno" title={semCategoria ? T.financas.categoriaObrigatoria : T.chat.permissao.sempreDica} disabled={semCategoria} onClick={aoSempre}>
             <ShieldCheck size={13} />
             {T.chat.permissao.sempre}
           </button>
@@ -84,9 +101,9 @@ export function CartoesDaMensagem({ conversaId, mensagem, compacto, atalhos = fa
   const primeiroPendente = mensagem.confirmacao?.situacao === "pendente" ? -1 : mensagem.confirmacoes?.findIndex((c) => c.situacao === "pendente") ?? -2;
   return (
     <>
-      {mensagem.confirmacao && <Cartao cartao={mensagem.confirmacao} agenteNome={nome} compacto={compacto} atalhos={atalhos && primeiroPendente === -1} aoSempre={() => sempre(mensagem.confirmacao!, null)} aoDecidir={(a) => decidirCartao(conversaId, mensagem, null, a)} />}
+      {mensagem.confirmacao && <Cartao cartao={mensagem.confirmacao} agenteNome={nome} compacto={compacto} atalhos={atalhos && primeiroPendente === -1} aoSempre={() => sempre(mensagem.confirmacao!, null)} aoDecidir={(a) => decidirCartao(conversaId, mensagem, null, a)} aoMudarDados={(d) => alterarDadosDoCartao(conversaId, mensagem, null, d)} />}
       {mensagem.confirmacoes?.map((c, i) => (
-        <Cartao key={i} cartao={c} agenteNome={nome} compacto={compacto} atalhos={atalhos && primeiroPendente === i} aoSempre={() => sempre(c, i)} aoDecidir={(a) => decidirCartao(conversaId, mensagem, i, a)} />
+        <Cartao key={i} cartao={c} agenteNome={nome} compacto={compacto} atalhos={atalhos && primeiroPendente === i} aoSempre={() => sempre(c, i)} aoDecidir={(a) => decidirCartao(conversaId, mensagem, i, a)} aoMudarDados={(d) => alterarDadosDoCartao(conversaId, mensagem, i, d)} />
       ))}
     </>
   );

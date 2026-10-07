@@ -763,29 +763,64 @@ button.ilha-rapido-icone:hover:not(:disabled),
 .ilha-personalizar {
   left: 8px;
   right: auto;
-  width: 300px;
-  gap: 14px;
+  width: 368px;
+  gap: 8px;
   transform-origin: top left;
+}
+
+.ilha-personalizar-grupo {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  border-radius: 14px;
+  background: var(--i-elevado);
+  box-shadow: inset 0 0 0 1px rgba(var(--i-rgb), 0.05);
 }
 
 .ilha-personalizar-secao {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .ilha-personalizar-titulo {
-  color: var(--i-dim-3);
-  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--i-tinta);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+}
+
+.ilha-personalizar-titulo svg {
+  color: var(--i-dim);
 }
 
 .ilha-personalizar-rotulo {
   flex: 0 0 auto;
   color: var(--i-dim);
   font-size: 11px;
+}
+
+.ilha-personalizar-dica {
+  margin: 0;
+  color: var(--i-dim-3);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.ilha-personalizar-aviso {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--i-dim);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ilha-personalizar-aviso svg {
+  flex: none;
 }
 
 .ilha-personalizar-rodape {
@@ -804,7 +839,20 @@ button.ilha-rapido-icone:hover:not(:disabled),
   gap: 2px;
   padding: 2px;
   border-radius: 10px;
-  background: var(--i-elevado);
+  background: rgba(var(--i-rgb), 0.06);
+}
+
+.ilha-escolha[data-grade] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ilha-escolha[data-desativada] {
+  opacity: 0.45;
+}
+
+.ilha-escolha-opcao:disabled {
+  cursor: not-allowed;
 }
 
 .ilha-escolha-opcao {
@@ -818,13 +866,15 @@ button.ilha-rapido-icone:hover:not(:disabled),
   transition: background 0.15s, color 0.15s;
 }
 
-.ilha-escolha-opcao:hover {
+.ilha-escolha-opcao:hover:not(:disabled) {
   color: var(--i-tinta);
 }
 
 .ilha-escolha-opcao[aria-checked="true"] {
-  background: var(--i-ligado);
-  color: var(--i-tinta-ligado);
+  background: var(--i-elevado-3);
+  color: var(--i-tinta);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(var(--i-rgb), 0.1), 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
 .ilha-amostras {

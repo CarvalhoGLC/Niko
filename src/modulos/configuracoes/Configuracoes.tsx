@@ -4,7 +4,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } 
 import { CSS } from "@dnd-kit/utilities";
 import {
   Settings, Palette, PanelTop, PanelBottom, Timer, Users, Volume2, Gauge, Maximize, Keyboard, ShieldCheck, Database, Info, Wrench,
-  GripVertical, Download, Upload, RotateCcw, Trash2, DatabaseBackup, SquareTerminal,
+  GripVertical, Download, Upload, RotateCcw, Trash2, DatabaseBackup, SquareTerminal, Sparkles,
 } from "lucide-react";
 import { CabecalhoAba } from "../../componentes/CabecalhoAba";
 import { Cartao, Botao, Campo, Modal, Segmentado, AvisoFaixa, LinhaAlternador, Alternador, Tecla, ConfirmarModal } from "../../componentes/basicos";
@@ -25,6 +25,7 @@ import { DESTAQUE_PADRAO } from "../../janelas/area-de-trabalho/usarTema";
 import { EditorFoto } from "../../componentes/FotoPerfil";
 import { SeletorDeFundo } from "./SeletorDeFundo";
 import { SecaoClaudeCode } from "./SecaoClaudeCode";
+import { pedirSaudacao } from "../../janelas/ilha/animacoes/pedirSaudacao";
 import type { EstadoAgente, Rota } from "../../tipos";
 
 type Secao = keyof typeof T.configuracoes.secoes;
@@ -425,6 +426,10 @@ export default function Configuracoes() {
     ilha: (
       <>
         <LinhaAlternador rotulo={T.configuracoes.ilhaAtiva} ligado={cfg.ilha.ativa} aoMudar={(v) => cfg.definirIlha({ ativa: v })} />
+        <div className="linha-entre" style={{ gap: 12 }}>
+          <span className="campo-dica">{T.configuracoes.verSaudacaoDica}</span>
+          <Botao pequeno icone={<Sparkles size={13} />} disabled={!cfg.ilha.ativa} onClick={() => void pedirSaudacao()}>{T.configuracoes.verSaudacao}</Botao>
+        </div>
         <div className="campo-grupo">
           <span className="campo-rotulo">{T.configuracoes.modo}</span>
           {segModo(cfg.ilha.modo, (modo) => cfg.definirIlha({ modo }))}

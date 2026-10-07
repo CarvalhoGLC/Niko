@@ -1,7 +1,7 @@
 {
     "name": "niko",
     "private": true,
-    "version": "0.2.0",
+    "version": "0.2.1",
     "type": "module",
     "license": "SEE LICENSE IN LICENSE.md",
     "scripts": {
@@ -9,7 +9,7 @@
         "build": "tsc && vite build",
         "preview": "vite preview",
         "verificar": "tsc",
-        "test": "node --test --test-concurrency=1 scripts/chat.test.mjs scripts/midia.test.mjs scripts/claude.test.mjs scripts/versao-release.test.mjs scripts/animacoes-ilha.test.mjs scripts/navegacao-ilha.test.mjs scripts/ponte.test.mjs",
+        "test": "node --test --test-concurrency=1 scripts/chat.test.mjs scripts/midia.test.mjs scripts/claude.test.mjs scripts/agentes.test.mjs scripts/dock.test.mjs scripts/versao-release.test.mjs scripts/animacoes-ilha.test.mjs scripts/navegacao-ilha.test.mjs scripts/ponte.test.mjs",
         "personagens": "node scripts/preparar-personagens.mjs",
         "ponte:build": "node scripts/construir-ponte.mjs",
         "tauri": "tauri",
@@ -50,6 +50,7 @@
         "zustand": "^5.0.15"
     },
     "devDependencies": {
+        "@rolldown/binding-win32-x64-msvc": "^1.2.12",
         "@tauri-apps/cli": "^2.12.1",
         "@types/node": "^26.6.4",
         "@types/react": "^19.3.0",

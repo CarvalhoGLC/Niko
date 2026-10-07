@@ -16,7 +16,7 @@ function litros(ml: number) {
   return (ml / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
 }
 
-export function imprimirMes(mes: Date) {
+export function imprimirMes(mes: Date, aoFalhar: () => void) {
   const { tarefas, dias, habitos, registros } = useRotina.getState();
   const cfg = useConfig.getState();
   const P = T.journal.impressao;
@@ -162,11 +162,43 @@ export function imprimirMes(mes: Date) {
   <footer>${e(P.rodape)}</footer>
   </div></body></html>`;
 
-  const janela = window.open("", "_blank", "width=860,height=1000");
-  if (!janela) return false;
-  janela.document.write(html);
-  janela.document.close();
-  janela.focus();
-  window.setTimeout(() => janela.print(), 350);
-  return true;
+  imprimirEmQuadroInvisivel(html, aoFalhar);
+}
+
+const ESPERA_PARA_IMPRIMIR_MS = 350;
+const LIMITE_DO_QUADRO_MS = 10 * 60_000;
+
+function imprimirEmQuadroInvisivel(html: string, aoFalhar: () => void) {
+  document.querySelector("iframe[data-niko-impressao]")?.remove();
+  const quadro = document.createElement("iframe");
+  quadro.dataset.nikoImpressao = "";
+  quadro.setAttribute("aria-hidden", "true");
+  quadro.tabIndex = -1;
+  quadro.style.cssText = "position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none";
+  const endereco = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+  const remover = () => {
+    quadro.remove();
+    URL.revokeObjectURL(endereco);
+  };
+  quadro.onload = () => {
+    const alvo = quadro.contentWindow;
+    if (!alvo) {
+      remover();
+      aoFalhar();
+      return;
+    }
+    alvo.addEventListener("afterprint", () => window.setTimeout(remover, 0), { once: true });
+    window.setTimeout(() => {
+      try {
+        alvo.focus();
+        alvo.print();
+      } catch {
+        remover();
+        aoFalhar();
+      }
+    }, ESPERA_PARA_IMPRIMIR_MS);
+    window.setTimeout(remover, LIMITE_DO_QUADRO_MS);
+  };
+  quadro.src = endereco;
+  document.body.appendChild(quadro);
 }

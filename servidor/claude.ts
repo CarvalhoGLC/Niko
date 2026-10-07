@@ -1,12 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { pastaDados } from "./ia";
 
-const CABECALHO_SEGREDO = "x-niko-gancho";
+export const CABECALHO_SEGREDO = "x-niko-gancho";
 const CAMINHO_EVENTO = "/ponte/claude/evento";
 const LIMITE_CORPO = 2 * 1024 * 1024;
 const LIMITE_CAMPO = 4000;
@@ -32,10 +32,15 @@ export const EVENTOS_INSTALADOS = [
 ] as const;
 
 const CAMPOS_DESCARTADOS = ["tool_response", "tool_result", "transcript_path", "scratchpad_dir"];
+const FERRAMENTAS_QUE_DECIDEM = new Set<FerramentaDeCodigo>(["claude", "codex", "copilot"]);
+const MENSAGEM_DE_NEGACAO = "Negado pelo usuário no Niko.";
+
+export type FerramentaDeCodigo = "claude" | "copilot" | "codex" | "opencode" | "antigravity" | "kimi";
 
 export interface EventoClaude {
   id: string;
   recebidoEm: string;
+  ferramenta: FerramentaDeCodigo;
   evento: string;
   sessao: string;
   cwd: string;
@@ -50,6 +55,7 @@ interface RegraSugerida {
 
 interface Pendente {
   res: ServerResponse;
+  ferramenta: FerramentaDeCodigo;
   temporizador: NodeJS.Timeout;
   sessao: string;
   sugestoes: RegraSugerida[];
@@ -84,7 +90,7 @@ function caminhoSettings() {
   return join(pastaClaude(), "settings.json");
 }
 
-function porta() {
+export function porta() {
   return Number(process.env.NIKO_PORTA) || 47831;
 }
 
@@ -94,7 +100,7 @@ function urlDoGancho() {
 
 let segredoEmMemoria: string | null = null;
 
-function segredo(): string {
+export function segredo(): string {
   if (segredoEmMemoria) return segredoEmMemoria;
   const arquivo = join(pastaDados(), "gancho-claude.json");
   try {
@@ -108,7 +114,7 @@ function segredo(): string {
   return (segredoEmMemoria = novo);
 }
 
-function segredoConfere(recebido: unknown): boolean {
+export function segredoConfere(recebido: unknown): boolean {
   if (typeof recebido !== "string") return false;
   const esperado = Buffer.from(segredo());
   const dado = Buffer.from(recebido);
@@ -261,7 +267,7 @@ function cortar(valor: unknown, limite = LIMITE_CAMPO, profundidade = 0): unknow
   return valor;
 }
 
-function lerCorpoJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+export function lerCorpoJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolver, rejeitar) => {
     let tamanho = 0;
     const partes: Buffer[] = [];
@@ -286,6 +292,38 @@ function lerCorpoJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   });
 }
 
+const EVENTOS_COM_MODELO = new Set(["SessionStart", "UserPromptSubmit", "Stop", "SubagentStop"]);
+const BYTES_DO_FIM_DO_TRANSCRIPT = 256 * 1024;
+
+/** Lê só o fim do transcript da sessão e devolve o modelo da última resposta do assistente. */
+export function modeloDoTranscript(caminho: string): string | undefined {
+  if (!isAbsolute(caminho) || !caminho.endsWith(".jsonl") || caminho.length > 1000) return undefined;
+  let descritor: number | undefined;
+  try {
+    const tamanho = statSync(caminho).size;
+    const inicio = Math.max(0, tamanho - BYTES_DO_FIM_DO_TRANSCRIPT);
+    const buffer = Buffer.alloc(tamanho - inicio);
+    descritor = openSync(caminho, "r");
+    readSync(descritor, buffer, 0, buffer.length, inicio);
+    const linhas = buffer.toString("utf8").split("\n");
+    for (let i = linhas.length - 1; i >= 0; i--) {
+      if (!linhas[i].includes('"model"')) continue;
+      try {
+        const linha = JSON.parse(linhas[i]) as { type?: string; message?: { model?: unknown } };
+        const modelo = linha.type === "assistant" ? linha.message?.model : undefined;
+        if (typeof modelo === "string" && modelo && !modelo.startsWith("<")) return modelo.slice(0, 80);
+      } catch {
+        // linha cortada no começo do trecho lido
+      }
+    }
+  } catch {
+    return undefined;
+  } finally {
+    if (descritor !== undefined) closeSync(descritor);
+  }
+  return undefined;
+}
+
 function transmitir(evento: EventoClaude) {
   historico.push(evento);
   if (historico.length > MAXIMO_HISTORICO) historico.splice(0, historico.length - MAXIMO_HISTORICO);
@@ -293,7 +331,7 @@ function transmitir(evento: EventoClaude) {
   for (const ouvinte of ouvintes) ouvinte.write(linha);
 }
 
-function responderVazio(res: ServerResponse) {
+export function responderVazio(res: ServerResponse) {
   if (res.writableEnded) return;
   res.statusCode = 200;
   res.setHeader("cache-control", "no-store");
@@ -311,14 +349,21 @@ export async function receberEventoDoGancho(req: IncomingMessage, res: ServerRes
   } catch {
     return responderVazio(res);
   }
-  for (const campo of CAMPOS_DESCARTADOS) delete corpo[campo];
+  processarEvento(corpo, "claude", res);
+}
+
+export function processarEvento(corpo: Record<string, unknown>, ferramenta: FerramentaDeCodigo, res: ServerResponse, aoResponderVazio: (res: ServerResponse) => void = responderVazio) {
   const nome = typeof corpo.hook_event_name === "string" ? corpo.hook_event_name : "";
+  const modeloAtual = EVENTOS_COM_MODELO.has(nome) && typeof corpo.transcript_path === "string" ? modeloDoTranscript(corpo.transcript_path) : undefined;
+  for (const campo of CAMPOS_DESCARTADOS) delete corpo[campo];
+  if (modeloAtual) corpo.model = modeloAtual;
   const ultima = typeof corpo.last_assistant_message === "string" ? corpo.last_assistant_message.slice(0, LIMITE_RESPOSTA_FINAL) : undefined;
   const dados = cortar(corpo) as Record<string, unknown>;
   if (ultima !== undefined) dados.last_assistant_message = ultima;
   const evento: EventoClaude = {
     id: randomUUID(),
     recebidoEm: new Date().toISOString(),
+    ferramenta,
     evento: nome,
     sessao: typeof corpo.session_id === "string" ? corpo.session_id : "",
     cwd: typeof corpo.cwd === "string" ? corpo.cwd : "",
@@ -328,15 +373,15 @@ export async function receberEventoDoGancho(req: IncomingMessage, res: ServerRes
     projetosConhecidos.add(evento.cwd);
     if (projetosConhecidos.size > 50) projetosConhecidos.delete(projetosConhecidos.values().next().value as string);
   }
-  if (nome !== "PermissionRequest" || ouvintes.size === 0) {
-    responderVazio(res);
+  if (nome !== "PermissionRequest" || ouvintes.size === 0 || !FERRAMENTAS_QUE_DECIDEM.has(ferramenta)) {
+    aoResponderVazio(res);
     transmitir(evento);
     return;
   }
   const pedidoId = randomUUID();
   evento.pedidoId = pedidoId;
   const temporizador = setTimeout(() => encerrarPedido(pedidoId, null, "expirou"), ESPERA_DECISAO_MS);
-  pendentes.set(pedidoId, { res, temporizador, sessao: evento.sessao, sugestoes: regrasSugeridas(corpo) });
+  pendentes.set(pedidoId, { res, ferramenta, temporizador, sessao: evento.sessao, sugestoes: ferramenta === "claude" ? regrasSugeridas(corpo) : [] });
   res.on("close", () => {
     if (pendentes.has(pedidoId)) encerrarPedido(pedidoId, null, "cancelado");
   });
@@ -349,13 +394,17 @@ function encerrarPedido(pedidoId: string, decisao: "allow" | "deny" | null, moti
   pendentes.delete(pedidoId);
   clearTimeout(pendente.temporizador);
   if (!pendente.res.writableEnded) {
-    if (decisao) {
+    if (decisao && pendente.ferramenta === "copilot") {
+      pendente.res.statusCode = 200;
+      pendente.res.setHeader("content-type", "application/json; charset=utf-8");
+      pendente.res.end(JSON.stringify(decisao === "allow" ? { behavior: "allow" } : { behavior: "deny", message: MENSAGEM_DE_NEGACAO }));
+    } else if (decisao) {
       const corpo = {
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
           decision:
             decisao === "deny"
-              ? { behavior: "deny" }
+              ? { behavior: "deny", message: MENSAGEM_DE_NEGACAO }
               : regra
                 ? { behavior: "allow", updatedPermissions: [{ type: "allow", toolName: regra.toolName, ruleContent: regra.ruleContent, behavior: "allow", mode: "local", directories: [] }] }
                 : { behavior: "allow" },
@@ -366,7 +415,7 @@ function encerrarPedido(pedidoId: string, decisao: "allow" | "deny" | null, moti
       pendente.res.end(JSON.stringify(corpo));
     } else responderVazio(pendente.res);
   }
-  transmitir({ id: randomUUID(), recebidoEm: new Date().toISOString(), evento: "NikoPedidoEncerrado", sessao: pendente.sessao, cwd: "", dados: { motivo, decisao }, pedidoId });
+  transmitir({ id: randomUUID(), recebidoEm: new Date().toISOString(), ferramenta: pendente.ferramenta, evento: "NikoPedidoEncerrado", sessao: pendente.sessao, cwd: "", dados: { motivo, decisao }, pedidoId });
   return true;
 }
 
@@ -431,7 +480,7 @@ export function ouvirEventos(req: IncomingMessage, res: ServerResponse) {
   const limite = Date.now() - 6 * 3600_000;
   for (const evento of historico) if (Date.parse(evento.recebidoEm) >= limite) res.write(`${JSON.stringify(evento)}\n`);
 
-  res.write(`${JSON.stringify({ evento: "NikoConectado", id: randomUUID(), recebidoEm: new Date().toISOString(), sessao: "", cwd: "", dados: {} })}\n`);
+  res.write(`${JSON.stringify({ evento: "NikoConectado", id: randomUUID(), recebidoEm: new Date().toISOString(), ferramenta: "claude", sessao: "", cwd: "", dados: {} })}\n`);
   ouvintes.add(res);
   const pulso = setInterval(() => res.write("\n"), 20_000);
   req.on("close", () => {

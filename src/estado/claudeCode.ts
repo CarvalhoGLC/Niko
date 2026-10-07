@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { EventoClaude, RegraSugerida } from "../ponte/claudeCode";
+import type { EventoClaude, FerramentaDeCodigo, RegraSugerida } from "../ponte/claudeCode";
 import { alteracaoDaFerramenta, type AlteracaoDeArquivo } from "../utilitarios/diff";
 import { T } from "../textos/textos";
 
@@ -17,6 +17,7 @@ export interface PassoClaude {
 
 export interface SessaoClaude {
   id: string;
+  ferramenta: FerramentaDeCodigo;
   projeto: string;
   cwd: string;
   estado: EstadoSessao;
@@ -33,6 +34,7 @@ export interface SessaoClaude {
 
 export interface PedidoDePermissao {
   pedidoId: string;
+  ferramentaDeCodigo: FerramentaDeCodigo;
   sessao: string;
   projeto: string;
   ferramenta: string;
@@ -49,14 +51,25 @@ export type MotivoDeEncerramento = keyof typeof T.ilha.claude.pedidoEncerrado;
 const MAXIMO_SESSOES = 8;
 const CAMPOS_ALVO = ["command", "file_path", "path", "url", "query", "pattern", "prompt", "description"] as const;
 
+/** "claude-opus-4-7[1m]" vira "Opus 4.7"; "claude-3-5-sonnet-20241022" vira "Sonnet 3.5"; o resto fica como veio. */
+export function nomeDoModelo(id: string): string {
+  const limpo = id.trim().replace(/\[.*\]$/, "").replace(/-\d{8}$/, "");
+  const novo = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?$/i.exec(limpo);
+  const antigo = /^claude-(\d+)(?:-(\d{1,2}))?-([a-z]+)$/i.exec(limpo);
+  const familia = novo?.[1] ?? antigo?.[3];
+  const versao = novo ? [novo[2], novo[3]] : antigo ? [antigo[1], antigo[2]] : null;
+  if (!familia || !versao) return limpo;
+  return `${familia[0].toUpperCase()}${familia.slice(1).toLowerCase()} ${versao.filter(Boolean).join(".")}`;
+}
+
 function texto(valor: unknown): string {
   return typeof valor === "string" ? valor : "";
 }
 
-export function nomeDoProjeto(cwd: string): string {
+export function nomeDoProjeto(cwd: string, reserva = "Claude Code"): string {
   const limpo = cwd.replace(/[\\/]+$/, "");
   const i = Math.max(limpo.lastIndexOf("\\"), limpo.lastIndexOf("/"));
-  return (i >= 0 ? limpo.slice(i + 1) : limpo) || "Claude Code";
+  return (i >= 0 ? limpo.slice(i + 1) : limpo) || reserva;
 }
 
 export function rotuloDaFerramenta(ferramenta: string): string {
@@ -123,6 +136,44 @@ function jaFoiAplicado(id: string): boolean {
   return false;
 }
 
+const CHAVE_FECHADAS = "niko:claude-sessoes-fechadas";
+const MAXIMO_FECHADAS = 60;
+
+function lerFechadas(): Record<string, number> {
+  try {
+    const dados = JSON.parse(localStorage.getItem(CHAVE_FECHADAS) ?? "{}") as unknown;
+    return dados && typeof dados === "object" && !Array.isArray(dados) ? (dados as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function gravarFechadas(fechadas: Record<string, number>) {
+  const recentes = Object.entries(fechadas).sort((a, b) => b[1] - a[1]).slice(0, MAXIMO_FECHADAS);
+  try {
+    localStorage.setItem(CHAVE_FECHADAS, JSON.stringify(Object.fromEntries(recentes)));
+  } catch {
+    return;
+  }
+}
+
+function sessaoFoiFechadaAntes(e: EventoClaude): boolean {
+  const fechadas = lerFechadas();
+  const fechadaEm = fechadas[e.sessao];
+  if (fechadaEm === undefined) return false;
+  if (Date.parse(e.recebidoEm) <= fechadaEm) return true;
+  delete fechadas[e.sessao];
+  gravarFechadas(fechadas);
+  return false;
+}
+
+function semASessao(s: { sessoes: Record<string, SessaoClaude>; ordem: string[]; focada: string | null; pedidos: PedidoDePermissao[] }, id: string) {
+  const sessoes = { ...s.sessoes };
+  delete sessoes[id];
+  const ordem = s.ordem.filter((x) => x !== id);
+  return { sessoes, ordem, focada: s.focada === id ? ordem[0] ?? null : s.focada, pedidos: s.pedidos.filter((p) => p.sessao !== id) };
+}
+
 function novoPasso(e: EventoClaude, tipo: PassoClaude["tipo"], rotulo: string, detalhe?: string, ferramenta?: string): PassoClaude {
   return { id: e.id, tipo, rotulo, detalhe, ferramenta, hora: e.recebidoEm };
 }
@@ -137,13 +188,10 @@ export const useClaudeCode = create<EstadoClaude>((set, get) => ({
   definirConectado: (conectado) => set({ conectado }),
   focar: (id) => set({ focada: id }),
   removerPedido: (pedidoId) => set((s) => ({ pedidos: s.pedidos.filter((p) => p.pedidoId !== pedidoId) })),
-  fechar: (id) =>
-    set((s) => {
-      const sessoes = { ...s.sessoes };
-      delete sessoes[id];
-      const ordem = s.ordem.filter((x) => x !== id);
-      return { sessoes, ordem, focada: s.focada === id ? ordem[0] ?? null : s.focada, pedidos: s.pedidos.filter((p) => p.sessao !== id) };
-    }),
+  fechar: (id) => {
+    gravarFechadas({ ...lerFechadas(), [id]: Date.now() });
+    set((s) => semASessao(s, id));
+  },
 
   aplicar: (e) => {
     if (e.evento === "NikoConectado" || jaFoiAplicado(e.id)) return;
@@ -161,13 +209,19 @@ export const useClaudeCode = create<EstadoClaude>((set, get) => ({
       });
       return;
     }
-    if (!e.sessao) return;
+    if (!e.sessao || sessaoFoiFechadaAntes(e)) return;
+    if (e.evento === "SessionEnd") {
+      set((s) => (s.sessoes[e.sessao] ? semASessao(s, e.sessao) : {}));
+      return;
+    }
     set((s) => {
       const d = e.dados;
       const anterior = s.sessoes[e.sessao];
+      const nomeReserva = T.ilha.claude.nomes[e.ferramenta ?? "claude"] ?? "Claude Code";
       const base: SessaoClaude = anterior ?? {
         id: e.sessao,
-        projeto: nomeDoProjeto(e.cwd),
+        ferramenta: e.ferramenta ?? "claude",
+        projeto: nomeDoProjeto(e.cwd, nomeReserva),
         cwd: e.cwd,
         estado: "ociosa",
         passos: [],
@@ -175,13 +229,15 @@ export const useClaudeCode = create<EstadoClaude>((set, get) => ({
         iniciadaEm: e.recebidoEm,
         atualizadaEm: e.recebidoEm,
       };
-      const sessao: SessaoClaude = { ...base, cwd: e.cwd || base.cwd, projeto: e.cwd ? nomeDoProjeto(e.cwd) : base.projeto, atualizadaEm: e.recebidoEm, modo: texto(d.permission_mode) || base.modo };
+      const sessao: SessaoClaude = { ...base, cwd: e.cwd || base.cwd, projeto: e.cwd ? nomeDoProjeto(e.cwd, nomeReserva) : base.projeto, atualizadaEm: e.recebidoEm, modo: texto(d.permission_mode) || base.modo, modelo: texto(d.model) || base.modelo };
       const passos = [...sessao.passos];
       let pedidos = s.pedidos;
       switch (e.evento) {
         case "SessionStart":
-          sessao.modelo = texto(d.model) || sessao.modelo;
           if (!anterior) sessao.estado = "ociosa";
+          break;
+        case "NikoPensando":
+          sessao.estado = "pensando";
           break;
         case "UserPromptSubmit": {
           const pedido = texto(d.prompt_text) || texto(d.prompt);
@@ -212,7 +268,7 @@ export const useClaudeCode = create<EstadoClaude>((set, get) => ({
           const ferramenta = texto(d.tool_name) || "Tool";
           const entrada = (d.tool_input ?? {}) as Record<string, unknown>;
           sessao.estado = "aprovacao";
-          pedidos = [...pedidos.filter((p) => p.pedidoId !== e.pedidoId), { pedidoId: e.pedidoId, sessao: e.sessao, projeto: sessao.projeto, ferramenta, alvo: alvoDaFerramenta(entrada), entrada: formatarEntrada(entrada), recebidoEm: e.recebidoEm, alteracao: alteracaoDaFerramenta(ferramenta, entrada), sugestoes: sugestoesDoEvento(d) }];
+          pedidos = [...pedidos.filter((p) => p.pedidoId !== e.pedidoId), { pedidoId: e.pedidoId, ferramentaDeCodigo: sessao.ferramenta, sessao: e.sessao, projeto: sessao.projeto, ferramenta, alvo: alvoDaFerramenta(entrada), entrada: formatarEntrada(entrada), recebidoEm: e.recebidoEm, alteracao: alteracaoDaFerramenta(ferramenta, entrada), sugestoes: sugestoesDoEvento(d) }];
           break;
         }
         case "Notification": {
@@ -242,10 +298,6 @@ export const useClaudeCode = create<EstadoClaude>((set, get) => ({
           break;
         case "SubagentStop":
           passos.push(novoPasso(e, "subagente", T.ilha.claude.subagenteTerminou(texto(d.agent_type) || "")));
-          break;
-        case "SessionEnd":
-          sessao.estado = "ociosa";
-          pedidos = pedidos.filter((p) => p.sessao !== e.sessao);
           break;
         default:
           return {};

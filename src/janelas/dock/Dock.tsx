@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
-import { NATIVO, usarAreaInterativa, usarCursorFora, usarAppsAbertos, agirNaJanela, alternarSistemaNativo, mostrarMiniaturas, ocultarBarraDoWindows, reservarEspacoDoDock, usarEstadoDaFrente, type AppAberto } from "../../desktop/desktop";
+import { NATIVO, ROTULO, usarAreaInterativa, usarCursorFora, usarAppsAbertos, agirNaJanela, alternarSistemaNativo, mostrarMiniaturas, ocultarBarraDoWindows, reservarEspacoDoDock, usarEstadoDaFrente, definirDocks, usarMonitores, type AppAberto } from "../../desktop/desktop";
+import { cadaDockMostraSeusApps, dockAtivoNoMonitor, meuMonitor, TODOS_OS_MONITORES } from "./monitores";
 import { AnimatePresence, motion, useMotionValue, useSpring, useTransform, type MotionValue } from "motion/react";
 import { useConfig } from "../../estado/configuracoes";
 import { useInterface } from "../../estado/interface";
@@ -12,7 +13,7 @@ import { tocarSom } from "../../ponte/sons";
 import { ALTURA_DOCK, alguemCobre } from "../geometria";
 import { ICONE_ROTA } from "../sistema/rotas";
 import { COR_AGENTE } from "../../personagens/cores";
-import { usarAparenciaDeBorda, variaveisDaBorda } from "../aparencia";
+import { atributosDoFundo, usarAparenciaDeBorda, variaveisDaBorda } from "../aparencia";
 import "./dock.css";
 
 interface PropsItemDock {
@@ -118,8 +119,9 @@ function PreviaJanelas({ lista, esquerda, aoEntrar, aoSair, aoFocar, aoFechar }:
   );
 }
 
-function AppsDoWindows({ mouseX, ampliar, ativo }: { mouseX: MotionValue<number>; ampliar: boolean; ativo: boolean }) {
-  const [apps, atualizar] = usarAppsAbertos(ativo);
+function AppsDoWindows({ mouseX, ampliar, ativo, monitor }: { mouseX: MotionValue<number>; ampliar: boolean; ativo: boolean; monitor?: string }) {
+  const [todosOsApps, atualizar] = usarAppsAbertos(ativo);
+  const apps = monitor ? todosOsApps.filter((a) => a.monitor === monitor) : todosOsApps;
   const [previa, setPrevia] = useState<{ chave: string; centro: number; esquerdaDock: number } | null>(null);
   const relogioAbrir = useRef<number | undefined>(undefined);
   const relogioFechar = useRef<number | undefined>(undefined);
@@ -246,15 +248,25 @@ export function Dock() {
   usarCursorFora(useCallback(() => setPerto(false), []));
   const caixa = useRef<HTMLDivElement>(null);
 
-  const frente = usarEstadoDaFrente(cfg.ativo);
+  const escolhaDeMonitor = cfg.monitores ?? TODOS_OS_MONITORES;
+  const monitores = usarMonitores();
+  const meu = meuMonitor(monitores, ROTULO);
+  const ativoAqui = cfg.ativo && dockAtivoNoMonitor(escolhaDeMonitor, meu, monitores, ROTULO);
+  const monitorDosApps = cadaDockMostraSeusApps(escolhaDeMonitor, monitores) ? meu?.nome : undefined;
+  const frente = usarEstadoDaFrente(ativoAqui);
+  const principal = !NATIVO || ROTULO === "dock";
 
   useEffect(() => {
-    if (NATIVO) void ocultarBarraDoWindows(cfg.ativo);
-  }, [cfg.ativo]);
+    if (NATIVO && principal) void ocultarBarraDoWindows(cfg.ativo);
+  }, [cfg.ativo, principal]);
 
   useEffect(() => {
-    if (NATIVO) void reservarEspacoDoDock(cfg.ativo && cfg.modo === "fixo");
-  }, [cfg.ativo, cfg.modo]);
+    if (NATIVO && principal) void definirDocks(cfg.ativo, escolhaDeMonitor);
+  }, [cfg.ativo, escolhaDeMonitor, principal]);
+
+  useEffect(() => {
+    if (NATIVO) void reservarEspacoDoDock(ativoAqui && cfg.modo === "fixo");
+  }, [ativoAqui, cfg.modo]);
 
   useEffect(() => {
     if (cfg.modo === "fixo") return;
@@ -271,7 +283,7 @@ export function Dock() {
     if (frente.telaCheia) setPerto(false);
   }, [frente.telaCheia]);
 
-  if (!cfg.ativo || frente.telaCheia) return null;
+  if (!ativoAqui || frente.telaCheia) return null;
 
   const largura = 90 + (janelas.length + (aberto ? 1 : 0)) * 50;
   const area = { x: (window.innerWidth - largura) / 2, y: window.innerHeight - ALTURA_DOCK, w: largura, h: ALTURA_DOCK };
@@ -317,7 +329,7 @@ export function Dock() {
       <motion.div
         ref={caixa}
         className="dock"
-        data-fundo-claro={aparencia.claro || undefined}
+        {...atributosDoFundo(aparencia)}
         style={{ ...variaveisDaBorda(aparencia), height: ALTURA_DOCK, background: fundo }}
         initial={false}
         animate={{ y: escondido ? ALTURA_DOCK + 8 : 0 }}
@@ -334,7 +346,7 @@ export function Dock() {
           <span className="dock-logo"><LogoNiko tamanho={28} /></span>
         </ItemDock>
         {NATIVO ? (
-          <AppsDoWindows mouseX={mouseX} ampliar={cfg.ampliar} ativo={!escondido} />
+          <AppsDoWindows mouseX={mouseX} ampliar={cfg.ampliar} ativo={!escondido} monitor={monitorDosApps} />
         ) : (
         <>
         {(aberto || janelas.length > 0) && <span className="dock-separador" />}

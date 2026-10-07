@@ -108,6 +108,16 @@
   flex: 0 0 auto;
 }
 
+.ilha-compacta[data-tipo="midia"] {
+  padding-left: 4px;
+}
+
+.ilha-capa-compacta {
+  border-radius: 8px;
+  background-size: cover !important;
+  background-position: center !important;
+}
+
 .ilha-onda {
   display: flex;
   align-items: center;
@@ -229,6 +239,11 @@
 
 .ilha-acao:hover {
   background: rgba(var(--i-rgb), 0.07);
+  color: var(--i-tinta);
+}
+
+.ilha-acao[aria-pressed="true"] {
+  background: var(--i-aba-ativa);
   color: var(--i-tinta);
 }
 
@@ -419,6 +434,10 @@
   color: #ff8d97;
 }
 
+[data-fundo-claro] .ilha-erro {
+  color: #c4313f;
+}
+
 .ilha-ok {
   font-size: 11px;
   color: var(--i-verde);
@@ -453,12 +472,13 @@
 }
 
 .ilha-botao-primario {
-  background: var(--i-tinta);
-  color: var(--i-tinta-inversa);
+  background: rgba(var(--i-rgb), 0.18);
+  color: var(--i-tinta);
+  box-shadow: inset 0 0 0 1px rgba(var(--i-rgb), 0.08);
 }
 
 .ilha-botao-primario:hover:not(:disabled) {
-  background: #fff;
+  background: rgba(var(--i-rgb), 0.24);
 }
 
 .ilha-botao-redondo {
@@ -503,6 +523,19 @@
 .ilha-chip[aria-pressed="true"] {
   background: rgba(var(--i-rgb), 0.12);
   color: var(--i-tinta);
+}
+
+.ilha-chip-numero {
+  font-size: 10.5px;
+  color: var(--i-dim-2);
+}
+
+.ilha-hoje-secao {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .ilha-trilho {
@@ -749,6 +782,47 @@
   line-clamp: 2;
   overflow: hidden;
   overflow-wrap: anywhere;
+}
+
+.ilha-lateral-modelo {
+  max-width: 100%;
+  font-family: var(--fonte-mono);
+  font-size: 10px;
+  color: var(--i-dim-3);
+}
+
+.ilha-lateral-estado {
+  margin-top: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--i-dim);
+  background: rgba(var(--i-rgb), 0.08);
+}
+
+.ilha-lateral-estado[data-estado="pensando"],
+.ilha-lateral-estado[data-estado="trabalhando"] {
+  color: #e8875f;
+  background: rgba(217, 119, 87, 0.16);
+}
+
+.ilha-lateral-estado[data-estado="aprovacao"],
+.ilha-lateral-estado[data-estado="esperando"] {
+  color: var(--i-ambar);
+  background: rgba(245, 165, 36, 0.16);
+}
+
+.ilha-lateral-estado[data-estado="erro"],
+.ilha-lateral-estado[data-estado="limite"] {
+  color: var(--i-vermelho);
+  background: rgba(244, 80, 94, 0.16);
+}
+
+.ilha-lateral-estado[data-estado="terminou"] {
+  color: var(--i-verde);
+  background: rgba(52, 211, 153, 0.14);
 }
 
 .ilha-miolo .ilha-visoes {

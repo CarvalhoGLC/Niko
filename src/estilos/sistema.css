@@ -836,8 +836,9 @@ code {
   top: -22px;
   padding: 2px 6px;
   border-radius: 5px;
-  background: var(--primario);
-  color: var(--primario-texto);
+  background: var(--botao-primario);
+  color: var(--botao-primario-texto);
+  border: 1px solid var(--botao-primario-borda);
   font-size: 10px;
   white-space: nowrap;
   z-index: 2;
