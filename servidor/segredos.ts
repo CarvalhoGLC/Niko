@@ -91,27 +91,65 @@ function validarId(id: string) {
   if (!/^[a-z0-9-]{1,64}$/.test(id)) throw new Error("id_invalido");
 }
 
+const NO_LINUX = process.platform === "linux";
+
+function secretTool(argumentos: string[], entrada = ""): Promise<{ codigo: number; saida: string }> {
+  return new Promise((resolver, rejeitar) => {
+    const processo = spawn("secret-tool", argumentos, { stdio: ["pipe", "pipe", "ignore"] });
+    let saida = "";
+    const relogio = setTimeout(() => {
+      processo.kill();
+      rejeitar(new Error("tempo_credencial"));
+    }, TEMPO_LIMITE_MS);
+    processo.stdout.on("data", (d) => (saida += d.toString()));
+    processo.on("error", (e: NodeJS.ErrnoException) => {
+      clearTimeout(relogio);
+      rejeitar(new Error(e.code === "ENOENT" ? "secret_tool_ausente" : "falha_credencial"));
+    });
+    processo.on("close", (codigo) => {
+      clearTimeout(relogio);
+      resolver({ codigo: codigo ?? 1, saida });
+    });
+    processo.stdin.on("error", () => undefined);
+    processo.stdin.end(entrada);
+  });
+}
+
 export async function gravarSegredo(id: string, segredo: string) {
   validarId(id);
   if (!segredo || segredo.length > 4000) throw new Error("segredo_invalido");
-  if (process.platform !== "win32") throw new Error("somente_windows");
-  const r = await executar({ acao: "gravar", alvo: PREFIXO + id, segredo });
-  if (!r.ok) throw new Error("falha_ao_gravar");
+  if (NO_LINUX) {
+    const r = await secretTool(["store", `--label=${PREFIXO}${id}`, "app", "niko", "id", id], segredo);
+    if (r.codigo !== 0) throw new Error("falha_ao_gravar");
+  } else if (process.platform === "win32") {
+    const r = await executar({ acao: "gravar", alvo: PREFIXO + id, segredo });
+    if (!r.ok) throw new Error("falha_ao_gravar");
+  } else {
+    throw new Error("plataforma_nao_suportada");
+  }
   leiturasEmAndamento.delete(id);
   cache.set(id, segredo);
+}
+
+function lerDoCofre(id: string): Promise<string | null> {
+  if (NO_LINUX) return secretTool(["lookup", "app", "niko", "id", id]).then((r) => (r.codigo === 0 ? r.saida : null));
+  return executar({ acao: "ler", alvo: PREFIXO + id }).then((r) => r.valor ?? null);
 }
 
 export async function lerSegredo(id: string): Promise<string | null> {
   validarId(id);
   if (cache.has(id)) return cache.get(id) ?? null;
-  if (process.platform !== "win32") return null;
+  if (process.platform !== "win32" && !NO_LINUX) return null;
   const emAndamento = leiturasEmAndamento.get(id);
   if (emAndamento) return emAndamento;
-  const leitura = executar({ acao: "ler", alvo: PREFIXO + id })
-    .then((r) => {
-      const valor = r.valor ?? null;
+  const leitura: Promise<string | null> = lerDoCofre(id)
+    .then((valor) => {
       if (leiturasEmAndamento.get(id) === leitura) cache.set(id, valor);
       return valor;
+    })
+    .catch((e) => {
+      if (NO_LINUX) return null;
+      throw e;
     })
     .finally(() => {
       if (leiturasEmAndamento.get(id) === leitura) leiturasEmAndamento.delete(id);
@@ -124,6 +162,10 @@ export async function apagarSegredo(id: string) {
   validarId(id);
   cache.delete(id);
   leiturasEmAndamento.delete(id);
+  if (NO_LINUX) {
+    await secretTool(["clear", "app", "niko", "id", id]);
+    return;
+  }
   if (process.platform !== "win32") return;
   await executar({ acao: "apagar", alvo: PREFIXO + id });
 }

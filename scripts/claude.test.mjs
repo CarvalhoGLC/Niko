@@ -10,6 +10,7 @@ const raizTemporaria = mkdtempSync(join(tmpdir(), "niko-claude-teste-"));
 process.env.USERPROFILE = raizTemporaria;
 process.env.HOME = raizTemporaria;
 process.env.APPDATA = join(raizTemporaria, "AppData");
+process.env.XDG_DATA_HOME = join(raizTemporaria, ".local", "share");
 process.env.NIKO_PORTA = "47999";
 
 const vite = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", optimizeDeps: { noDiscovery: true } });
@@ -18,7 +19,8 @@ const { useClaudeCode } = await vite.ssrLoadModule("/src/estado/claudeCode.ts");
 const pastaClaude = join(raizTemporaria, ".claude");
 const settings = join(pastaClaude, "settings.json");
 const lerSettings = () => JSON.parse(readFileSync(settings, "utf8"));
-const segredo = () => JSON.parse(readFileSync(join(process.env.APPDATA, "com.niko.desktop", "gancho-claude.json"), "utf8")).segredo;
+const pastaDeDados = join(process.platform === "win32" ? process.env.APPDATA : process.env.XDG_DATA_HOME, "com.niko.desktop");
+const segredo = () => JSON.parse(readFileSync(join(pastaDeDados, "gancho-claude.json"), "utf8")).segredo;
 
 let servidor;
 let base;

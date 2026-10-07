@@ -1,4 +1,7 @@
 import { criarProcessoPowerShell } from "./processoPowerShell";
+import * as linux from "./controleRapidoLinux";
+
+const NO_LINUX = process.platform === "linux";
 
 const CODIGO = String.raw`
 using System;
@@ -471,31 +474,44 @@ function caminhoDeApp(valor: unknown): string {
   return valor;
 }
 
-export const lerAudio = () => pedir({ acao: "audio" });
-export const definirVolume = (d: Record<string, unknown>) => pedir({ acao: "volume", fluxo: fluxoDe(d.alvo), valor: percentual(d.volume) });
-export const definirMudo = (d: Record<string, unknown>) => pedir({ acao: "mudo", fluxo: fluxoDe(d.alvo), mudo: d.mudo === true });
+export const lerAudio = () => (NO_LINUX ? linux.audio() : pedir({ acao: "audio" }));
+export const definirVolume = (d: Record<string, unknown>) => {
+  const fluxo = fluxoDe(d.alvo);
+  const valor = percentual(d.volume);
+  return NO_LINUX ? linux.volume(fluxo, valor) : pedir({ acao: "volume", fluxo, valor });
+};
+export const definirMudo = (d: Record<string, unknown>) => {
+  const fluxo = fluxoDe(d.alvo);
+  return NO_LINUX ? linux.mudo(fluxo, d.mudo === true) : pedir({ acao: "mudo", fluxo, mudo: d.mudo === true });
+};
 export const ajustarSessao = (d: Record<string, unknown>) => {
   const pids = Array.isArray(d.pids) ? d.pids.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 0xffffffff).slice(0, 64) : [];
   if (pids.length === 0) throw new Error("valor_invalido");
   const volume = d.volume === undefined ? -1 : percentual(d.volume);
   const mudo = d.mudo === undefined ? -1 : d.mudo === true ? 1 : 0;
+  if (NO_LINUX) return linux.sessao(pids, volume, mudo);
   return pedir({ acao: "sessao", pids, volume, mudo });
 };
-export const lerTema = () => pedir({ acao: "tema" });
-export const lerIniciar = () => pedir({ acao: "iniciar" });
-export const definirTema = (d: Record<string, unknown>) => pedir({ acao: "definirTema", escuro: d.escuro === true });
+export const lerTema = () => (NO_LINUX ? linux.tema() : pedir({ acao: "tema" }));
+export const lerIniciar = () => (NO_LINUX ? linux.iniciarAberto() : pedir({ acao: "iniciar" }));
+export const definirTema = (d: Record<string, unknown>) => (NO_LINUX ? linux.definirTema(d.escuro === true) : pedir({ acao: "definirTema", escuro: d.escuro === true }));
 export const abrirFerramenta = (d: Record<string, unknown>) => {
   if (!FERRAMENTAS.includes(d.nome as (typeof FERRAMENTAS)[number])) throw new Error("valor_invalido");
   if (d.abertoAntes !== undefined && typeof d.abertoAntes !== "boolean") throw new Error("valor_invalido");
+  if (NO_LINUX) return linux.ferramenta(String(d.nome));
   return pedir({ acao: "ferramenta", nome: d.nome, abertoAntes: d.abertoAntes });
 };
 export const agirNaEnergia = (d: Record<string, unknown>) => {
   if (!ENERGIA.includes(d.tipo as (typeof ENERGIA)[number])) throw new Error("valor_invalido");
   if (d.confirmacao !== "CONFIRMADO") throw new Error("confirmacao_invalida");
+  if (NO_LINUX) return linux.energia(String(d.tipo));
   return pedir({ acao: "energia", tipo: d.tipo });
 };
-export const lerBandeja = () => pedir({ acao: "bandeja" }, 20000);
-export const abrirDaBandeja = (d: Record<string, unknown>) => pedir({ acao: "abrirDaBandeja", caminho: caminhoDeApp(d.caminho) });
+export const lerBandeja = () => (NO_LINUX ? linux.bandeja() : pedir({ acao: "bandeja" }, 20000));
+export const abrirDaBandeja = (d: Record<string, unknown>) => {
+  if (NO_LINUX) return Promise.reject(new Error("app_desconhecido"));
+  return pedir({ acao: "abrirDaBandeja", caminho: caminhoDeApp(d.caminho) });
+};
 
 export function encerrarControle() {
   controle.encerrar();

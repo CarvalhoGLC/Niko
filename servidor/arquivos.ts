@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, copyFileSync } from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { extname, join, parse } from "node:path";
+import { dirname, extname, join, parse } from "node:path";
 import { randomUUID } from "node:crypto";
 import { pastaDados } from "./ia";
 
@@ -188,8 +188,19 @@ function caminhoLivre(pasta: string, nome: string) {
 }
 
 function abrirNoWindows(argumentos: string[]) {
-  if (process.platform !== "win32") return;
-  const filho = spawn("explorer.exe", argumentos, { detached: true, stdio: "ignore", windowsHide: false });
+  let programa: string;
+  let parametros: string[];
+  if (process.platform === "win32") {
+    programa = "explorer.exe";
+    parametros = argumentos;
+  } else if (process.platform === "linux") {
+    const alvo = argumentos[argumentos.length - 1];
+    programa = "xdg-open";
+    parametros = [argumentos[0] === "/select," ? dirname(alvo) : alvo];
+  } else {
+    return;
+  }
+  const filho = spawn(programa, parametros, { detached: true, stdio: "ignore", windowsHide: false });
   filho.on("error", () => undefined);
   filho.unref();
 }

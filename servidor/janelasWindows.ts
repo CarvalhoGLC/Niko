@@ -1,4 +1,5 @@
 import { criarProcessoPowerShell } from "./processoPowerShell";
+import { pedirJanelasLinux } from "./janelasLinux";
 
 const CODIGO = String.raw`
 using System;
@@ -126,6 +127,7 @@ const janelas = criarProcessoPowerShell("niko-janelas", SCRIPT, "janelas_encerra
 
 export function pedirJanelas(acao: "listar" | "focar" | "minimizar" | "fechar", janela?: string): Promise<unknown> {
   if (janela !== undefined && !/^\d{1,20}$/.test(janela)) return Promise.reject(new Error("janela_invalida"));
+  if (process.platform === "linux") return pedirJanelasLinux(acao, janela);
   return janelas.pedir({ acao, janela }, 20000);
 }
 

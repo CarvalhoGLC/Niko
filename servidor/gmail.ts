@@ -17,8 +17,11 @@ function base64url(b: Buffer): string {
 }
 
 function abrirNoNavegador(url: string) {
-  if (process.platform !== "win32") throw new Error("somente_windows");
-  const filho = spawn("rundll32.exe", ["url.dll,FileProtocolHandler", url], { detached: true, stdio: "ignore", windowsHide: true });
+  if (process.platform !== "win32" && process.platform !== "linux") throw new Error("plataforma_nao_suportada");
+  const filho =
+    process.platform === "win32"
+      ? spawn("rundll32.exe", ["url.dll,FileProtocolHandler", url], { detached: true, stdio: "ignore", windowsHide: true })
+      : spawn("xdg-open", [url], { detached: true, stdio: "ignore" });
   filho.on("error", () => undefined);
   filho.unref();
 }

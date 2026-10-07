@@ -71,7 +71,10 @@ export function validarMensagens(valor: unknown): MensagemIa[] {
     }));
 }
 
-const PASTA = join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "com.niko.desktop");
+const PASTA =
+  process.platform === "win32"
+    ? join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "com.niko.desktop")
+    : join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "com.niko.desktop");
 const ARQUIVO = join(PASTA, "provedores.json");
 
 export function pastaDados() {

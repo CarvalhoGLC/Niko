@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { garantirScript } from "./scriptsTemporarios";
+import { ocrNoLinux } from "./ocrLinux";
 
 const LIMITE_IMAGEM = 25 * 1024 * 1024;
 const TEMPO_LIMITE = 60_000;
@@ -68,6 +69,7 @@ function receberImagem(req: IncomingMessage, destino: string): Promise<void> {
 }
 
 function rodarOcr(caminho: string): Promise<ResultadoOcr> {
+  if (process.platform === "linux") return ocrNoLinux(caminho);
   if (process.platform !== "win32") return Promise.reject(new Error("ocr_indisponivel"));
   const script = garantirScript("niko-ocr", `﻿${SCRIPT}`);
   return new Promise((resolver, rejeitar) => {

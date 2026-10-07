@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { pastaDados } from "./ia";
 
@@ -386,6 +386,11 @@ export function decidirPedido(corpo: Record<string, unknown>) {
 }
 
 function caminhoDoVsCode(): string | null {
+  if (process.platform !== "win32") {
+    const extras = ["/usr/bin/code", "/usr/local/bin/code", "/var/lib/flatpak/exports/bin/com.visualstudio.code"];
+    const doPath = (process.env.PATH ?? "").split(delimiter).filter(Boolean).map((p) => join(p, "code"));
+    return [...doPath, ...extras].find((c) => existsSync(c)) ?? null;
+  }
   const candidatos = [
     join(process.env.LOCALAPPDATA ?? "", "Programs", "Microsoft VS Code", "Code.exe"),
     join(process.env.ProgramFiles ?? "C:\\Program Files", "Microsoft VS Code", "Code.exe"),
@@ -413,7 +418,7 @@ export function abrirProjeto(corpo: Record<string, unknown>) {
     if (!code) throw new Error("vscode_nao_encontrado");
     abrirDesacoplado(code, [cwd]);
   } else if (corpo.como === "pasta") {
-    abrirDesacoplado("explorer.exe", [cwd]);
+    abrirDesacoplado(process.platform === "win32" ? "explorer.exe" : "xdg-open", [cwd]);
   } else throw new Error("acao_invalida");
   return { ok: true };
 }

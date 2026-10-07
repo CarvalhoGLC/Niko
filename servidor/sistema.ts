@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { garantirScript } from "./scriptsTemporarios";
 import { criarProcessoPowerShell } from "./processoPowerShell";
+import * as linux from "./sistemaLinux";
 
 const SCRIPT = String.raw`
 param([switch]$Continuo)
@@ -268,18 +269,19 @@ function texto(v: unknown, max: number) {
 }
 
 export function tipoDoComputador() {
+  if (process.platform === "linux") return linux.tipo();
   if (!tipoEmCache) tipoEmCache = executar<{ notebook: boolean; bateria: boolean }>({ acao: "tipo" }).catch(() => ({ notebook: false, bateria: false }));
   return tipoEmCache;
 }
 
 const leitorContinuo = criarProcessoPowerShell("niko-sistema", SCRIPT, "sistema_encerrado", ["-Continuo"]);
 
-export const estadoDoSistema = async () => ((await leitorContinuo.pedir({ acao: "estado" }, 20000)) as { r: unknown }).r;
+export const estadoDoSistema = async () => (process.platform === "linux" ? linux.estado() : ((await leitorContinuo.pedir({ acao: "estado" }, 20000)) as { r: unknown }).r);
 
 export function encerrarSistema() {
   leitorContinuo.encerrar();
 }
-export const listarRedes = () => executar({ acao: "redes" }, 25000);
+export const listarRedes = () => (process.platform === "linux" ? linux.redes() : executar({ acao: "redes" }, 25000));
 function nomeDeRede(v: unknown) {
   const ssid = texto(v, 64);
   if (ssid.includes('"')) throw new Error("valor_invalido");
@@ -290,25 +292,31 @@ export const conectarRede = (dados: Record<string, unknown>) => {
   const ssid = nomeDeRede(dados.ssid);
   const senha = typeof dados.senha === "string" && dados.senha ? texto(dados.senha, 63) : "";
   if (senha && senha.length < 8) throw new Error("senha_curta");
+  if (process.platform === "linux") return linux.conectar(ssid, senha);
   return executar({ acao: "conectar", ssid, senha }, 30000);
 };
-export const esquecerRede = (dados: Record<string, unknown>) => executar({ acao: "esquecer", ssid: nomeDeRede(dados.ssid) });
-export const desconectarRede = () => executar({ acao: "desconectar" });
+export const esquecerRede = (dados: Record<string, unknown>) => {
+  const ssid = nomeDeRede(dados.ssid);
+  return process.platform === "linux" ? linux.esquecer(ssid) : executar({ acao: "esquecer", ssid });
+};
+export const desconectarRede = () => (process.platform === "linux" ? linux.desconectar() : executar({ acao: "desconectar" }));
 export const definirBrilho = (dados: Record<string, unknown>) => {
   const nivel = Number(dados.nivel);
   if (!Number.isFinite(nivel)) throw new Error("valor_invalido");
+  if (process.platform === "linux") return linux.brilho(Math.round(nivel));
   return executar({ acao: "brilho", nivel: Math.round(nivel) });
 };
 export const definirRadio = (dados: Record<string, unknown>) => {
   const tipo = dados.tipo === "Bluetooth" ? "Bluetooth" : dados.tipo === "WiFi" ? "WiFi" : null;
   if (!tipo) throw new Error("valor_invalido");
+  if (process.platform === "linux") return linux.radio(tipo, Boolean(dados.ligado));
   return executar({ acao: "radio", tipo, ligado: Boolean(dados.ligado) });
 };
-export const listarBluetooth = () => executar({ acao: "bluetooth" });
+export const listarBluetooth = () => (process.platform === "linux" ? linux.bluetooth() : executar({ acao: "bluetooth" }));
 let computadorEmCache: { quando: number; dados: Promise<unknown> } | null = null;
 export const lerComputador = () => {
   if (!computadorEmCache || Date.now() - computadorEmCache.quando > 15000) {
-    const dados = executar({ acao: "computador" }, 30000);
+    const dados: Promise<unknown> = process.platform === "linux" ? linux.computador() : executar({ acao: "computador" }, 30000);
     computadorEmCache = { quando: Date.now(), dados };
     dados.catch(() => (computadorEmCache = null));
   }
@@ -316,5 +324,6 @@ export const lerComputador = () => {
 };
 export const abrirConfiguracoesWindows = (dados: Record<string, unknown>) => {
   const pagina = dados.pagina === "bluetooth" || dados.pagina === "wifi" ? dados.pagina : "bateria";
+  if (process.platform === "linux") return linux.configuracoes(pagina);
   return executar({ acao: "configuracoes", pagina });
 };

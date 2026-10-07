@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(windows)]
+use std::sync::atomic::AtomicIsize;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -10,8 +12,22 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+#[cfg(windows)]
 mod barra_windows;
+#[cfg(not(windows))]
+#[path = "barra_linux.rs"]
+mod barra_windows;
+
+#[cfg(windows)]
 mod janela_frente;
+#[cfg(not(windows))]
+#[path = "janela_frente_linux.rs"]
+mod janela_frente;
+
+#[cfg(windows)]
+mod miniaturas;
+#[cfg(not(windows))]
+#[path = "miniaturas_linux.rs"]
 mod miniaturas;
 
 const PORTA: u16 = 47831;
@@ -33,10 +49,8 @@ struct Estado {
 }
 
 fn gerar_token() -> String {
-    use windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
     let mut bytes = [0u8; 32];
-    let status = unsafe { BCryptGenRandom(None, &mut bytes, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
-    assert!(status.is_ok(), "falha ao gerar o token da ponte");
+    getrandom::getrandom(&mut bytes).expect("falha ao gerar o token da ponte");
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
@@ -62,8 +76,10 @@ fn mostrar_sistema(app: AppHandle) {
     mostrar(&app);
 }
 
+#[cfg(windows)]
 static ULTIMA_FRENTE: AtomicIsize = AtomicIsize::new(0);
 
+#[cfg(windows)]
 fn registrar_frente(app: &AppHandle) {
     let frente = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() }.0 as isize;
     if frente == 0 {
@@ -75,11 +91,17 @@ fn registrar_frente(app: &AppHandle) {
     }
 }
 
+#[cfg(not(windows))]
+fn registrar_frente(app: &AppHandle) {}
+
 #[tauri::command]
 fn alternar_sistema(app: AppHandle) {
     if let Some(janela) = app.get_webview_window("sistema") {
         let visivel = janela.is_visible().unwrap_or(false) && !janela.is_minimized().unwrap_or(false);
+        #[cfg(windows)]
         let focada = janela.hwnd().map(|h| h.0 as isize == ULTIMA_FRENTE.load(Ordering::Relaxed)).unwrap_or(false);
+        #[cfg(not(windows))]
+        let focada = janela.is_focused().unwrap_or(false);
         if visivel && focada {
             let _ = janela.minimize();
         } else {
@@ -88,28 +110,38 @@ fn alternar_sistema(app: AppHandle) {
     }
 }
 
+#[cfg(windows)]
+fn abrir_no_sistema(endereco: &str) -> Result<(), String> {
+    let largo: Vec<u16> = endereco.encode_utf16().chain(std::iter::once(0)).collect();
+    let resultado = unsafe {
+        windows::Win32::UI::Shell::ShellExecuteW(
+            None, windows::core::w!("open"), windows::core::PCWSTR(largo.as_ptr()),
+            None, None, windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+        )
+    };
+    if resultado.0 as isize > 32 { Ok(()) } else { Err("falha_ao_abrir".into()) }
+}
+
+#[cfg(not(windows))]
+fn abrir_no_sistema(endereco: &str) -> Result<(), String> {
+    let mut filho = Command::new("xdg-open")
+        .arg(endereco)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|_| "falha_ao_abrir".to_string())?;
+    std::thread::spawn(move || { let _ = filho.wait(); });
+    Ok(())
+}
+
 #[tauri::command]
 fn abrir_link(url: String) -> Result<(), String> {
     let endereco = url.trim();
     if !(endereco.starts_with("https://") || endereco.starts_with("http://")) || endereco.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err("link_invalido".into());
     }
-    let largo: Vec<u16> = endereco.encode_utf16().chain(std::iter::once(0)).collect();
-    let resultado = unsafe {
-        windows::Win32::UI::Shell::ShellExecuteW(
-            None,
-            windows::core::w!("open"),
-            windows::core::PCWSTR(largo.as_ptr()),
-            None,
-            None,
-            windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
-        )
-    };
-    if resultado.0 as isize > 32 {
-        Ok(())
-    } else {
-        Err("falha_ao_abrir".into())
-    }
+    abrir_no_sistema(endereco)
 }
 
 #[tauri::command]
@@ -155,6 +187,17 @@ fn criar_sobreposta(app: &AppHandle, rotulo: &str, y: f64, x: f64, largura: f64,
         .build()
 }
 
+fn ignorar_cursor(janela: &WebviewWindow, ignorar: bool) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if !janela.is_visible().unwrap_or(false) {
+            return false;
+        }
+    }
+    let _ = janela.set_ignore_cursor_events(ignorar);
+    true
+}
+
 fn vigiar_cursor(app: AppHandle) {
     std::thread::spawn(move || {
         let mut fora: HashMap<String, bool> = HashMap::new();
@@ -174,7 +217,9 @@ fn vigiar_cursor(app: AppHandle) {
                 let estava_fora = *fora.get(rotulo).unwrap_or(&false);
                 let agora_fora = !dentro;
                 if !fora.contains_key(rotulo) || estava_fora != agora_fora {
-                    let _ = janela.set_ignore_cursor_events(agora_fora);
+                    if !ignorar_cursor(&janela, agora_fora){
+                        continue;
+                    }
                     if agora_fora {
                         let _ = janela.emit_to(rotulo, "niko://cursor-fora", ());
                     }
@@ -212,7 +257,12 @@ fn iniciar_ponte(app: &AppHandle, token: &str, reinicio: bool) {
         return;
     };
     let recursos = sem_prefixo(pasta.join("recursos"));
-    let node = recursos.join("node.exe");
+    let node = if cfg!(windows) {
+        recursos.join("node.exe")
+    } else {
+        let embutido = recursos.join("node");
+        if embutido.exists() { embutido } else { std::path::PathBuf::from("node") }
+    };
     let script = recursos.join("ponte.mjs");
     let saida_erro = dados.as_ref().and_then(|p| {
         let caminho = sem_prefixo(p.join("ponte.log"));
@@ -302,6 +352,10 @@ fn vigiar_ponte(app: AppHandle, token: String) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("GDK_BACKEND").is_none() {
+        std::env::set_var("GDK_BACKEND", "x11");
+    }
     let token = gerar_token();
     let escondido = std::env::args().any(|a| a == "--escondido");
 
@@ -381,7 +435,7 @@ pub fn run() {
             criar_sobreposta(&handle, "dock", my + mh - ALTURA_DOCK, mx, mw, ALTURA_DOCK)?;
             for rotulo in ["ilha", "dock"] {
                 if let Some(j) = handle.get_webview_window(rotulo) {
-                    let _ = j.set_ignore_cursor_events(true);
+                    ignorar_cursor(&j, true);
                 }
             }
             vigiar_cursor(handle.clone());

@@ -1,4 +1,7 @@
 import { criarProcessoPowerShell } from "./processoPowerShell";
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 const SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -92,7 +95,78 @@ while ($true) {
 
 const midia = criarProcessoPowerShell("niko-midia", SCRIPT, "midia_encerrada");
 
-export function pedirMidia(acao: "estado" | "alternar" | "proxima" | "anterior" | "posicao", segundos?: number): Promise<unknown> {
+type AcaoMidia = "estado" | "alternar" | "proxima" | "anterior" | "posicao";
+
+const SEPARADOR_LINUX = "\u001f";
+const FORMATO_LINUX = ["{{playerName}}", "{{status}}", "{{title}}", "{{artist}}", "{{album}}", "{{position}}", "{{mpris:length}}", "{{mpris:artUrl}}"].join(SEPARADOR_LINUX);
+
+function playerctl(argumentos: string[]): Promise<string> {
+  return new Promise((resolver, rejeitar) => {
+    execFile("playerctl", argumentos, { timeout: 5000, encoding: "utf8" }, (erro, saida) => (erro ? rejeitar(erro) : resolver(saida)));
+  });
+}
+
+async function capaLinux(url: string): Promise<string | null> {
+  if (url.startsWith("https://")) return url;
+  if (!url.startsWith("file://")) return null;
+  try {
+    const bytes = await readFile(fileURLToPath(url));
+    if (bytes.length === 0 || bytes.length > 2_000_000) return null;
+    const tipo = /\.png$/i.test(url) ? "image/png" : /\.webp$/i.test(url) ? "image/webp" : "image/jpeg";
+    return `data:${tipo};base64,${bytes.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
+function microParaSegundos(valor: string): number {
+  const n = Number(valor);
+  return Number.isFinite(n) && n > 0 ? Math.round(n / 100000) / 10 : 0;
+}
+
+async function estadoLinux(): Promise<Record<string, unknown>> {
+  let saida: string;
+  try {
+    saida = await playerctl(["metadata", "--format", FORMATO_LINUX]);
+  } catch {
+    return { sessao: false };
+  }
+  const [app = "", status = "", titulo = "", artista = "", album = "", posicao = "", duracao = "", arte = ""] = saida.replace(/\n$/, "").split(SEPARADOR_LINUX);
+  return {
+    sessao: true,
+    app,
+    titulo,
+    artista,
+    album,
+    tocando: status === "Playing",
+    posicao: microParaSegundos(posicao),
+    duracao: microParaSegundos(duracao),
+    atualizadoEm: Date.now(),
+    podeAvancar: true,
+    podeVoltar: true,
+    podeBuscar: microParaSegundos(duracao) > 0,
+    capa: await capaLinux(arte),
+  };
+}
+
+async function pedirMidiaLinux(acao: AcaoMidia, segundos?: number): Promise<unknown> {
+  const comandos: Record<AcaoMidia, string[] | null> = {
+    estado: null,
+    alternar: ["play-pause"],
+    proxima: ["next"],
+    anterior: ["previous"],
+    posicao: ["position", String(Math.max(0, Number(segundos) || 0))],
+  };
+  const comando = comandos[acao];
+  if (comando) {
+    await playerctl(comando).catch(() => undefined);
+    await new Promise((resolver) => setTimeout(resolver, 250));
+  }
+  return estadoLinux();
+}
+
+export function pedirMidia(acao: AcaoMidia, segundos?: number): Promise<unknown> {
+  if (process.platform === "linux") return pedirMidiaLinux(acao, segundos);
   return midia.pedir({ acao, segundos: Number(segundos) || 0 });
 }
 
