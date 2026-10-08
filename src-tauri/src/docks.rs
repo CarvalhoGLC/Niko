@@ -97,7 +97,7 @@ pub fn posicionar_ilha(app: &AppHandle) {
     let _ = janela.set_position(destino);
 }
 
-pub fn reposicionar_todos(app: &AppHandle) {
+pub fn _reposicionar_todos(app: &AppHandle) {
     posicionar_ilha(app);
     for (monitor, info) in monitores_ordenados(app) {
         if let Some(janela) = app.get_webview_window(&info.rotulo) {
@@ -141,7 +141,7 @@ pub fn sincronizar(app: &AppHandle) {
             Some(j) => j,
             None => match criar_sobreposta(app, &info.rotulo, 0.0, 0.0, 400.0, ALTURA_DOCK) {
                 Ok(j) => {
-                    let _ = j.set_ignore_cursor_events(true);
+                    crate::ignorar_cursor(&j, true);
                     j
                 }
                 Err(_) => continue,

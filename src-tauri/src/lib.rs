@@ -95,13 +95,21 @@ fn liberar_sistema_inicial(app: AppHandle) {
 
 #[tauri::command]
 fn tempo_ocioso_ms() -> u64 {
-    use windows::Win32::System::SystemInformation::GetTickCount;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
-    let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
-    if !unsafe { GetLastInputInfo(&mut info) }.as_bool() {
-        return 0;
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::SystemInformation::GetTickCount;
+ 
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+        let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+        if !unsafe { GetLastInputInfo(&mut info) }.as_bool() {
+            return 0;
+        }
+        u64::from(unsafe { GetTickCount() }.wrapping_sub(info.dwTime))
     }
-    u64::from(unsafe { GetTickCount() }.wrapping_sub(info.dwTime))
+    #[cfg(not(windows))]
+    {
+        0
+    }
 }
 
 #[cfg(windows)]
@@ -117,7 +125,7 @@ fn registrar_frente(app: &AppHandle) {
 }
 
 #[cfg(not(windows))]
-fn registrar_frente(app: &AppHandle) {}
+fn registrar_frente(_app: &AppHandle) {}
 
 #[tauri::command]
 fn alternar_sistema(app: AppHandle) {

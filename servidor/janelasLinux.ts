@@ -4,7 +4,13 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { iconeDoApp } from "./controleRapidoLinux";
 
-// Funciona com janelas X11 e XWayland. Apps nativos de Wayland não aparecem nas ferramentas abaixo.
+// Duas fontes de janelas, nesta ordem:
+//  1. extensão "Window Calls" do GNOME Shell (enxerga tudo, inclusive apps nativos de Wayland);
+//  2. wmctrl/xprop (só janelas X11 e XWayland).
+
+const DESTINO = "org.gnome.Shell";
+const CAMINHO = "/org/gnome/Shell/Extensions/Windows";
+const INTERFACE = "org.gnome.Shell.Extensions.Windows";
 
 function rodar(programa: string, argumentos: string[], limiteMs = 5000): Promise<string> {
   return new Promise((resolver, rejeitar) => {
@@ -84,7 +90,7 @@ function iconeDe(icone: string): string | null {
   }
 }
 
-// O WM_CLASS vem como "instancia.Classe"; qualquer pedaço pode ser o nome do .desktop.
+// O WM_CLASS pode vir como "instancia.Classe" ou como o id do app ("org.gnome.Nautilus").
 function acharApp(classe: string, programa: string): AppDesktop | null {
   const partes = classe.toLowerCase().split(".");
   const candidatos = [classe.toLowerCase()];
@@ -99,61 +105,128 @@ function acharApp(classe: string, programa: string): AppDesktop | null {
   return null;
 }
 
-// ---------- janelas ----------
+// ---------- fonte 1: extensão Window Calls ----------
 
-interface JanelaX {
+interface JanelaBruta {
   id: number;
   pid: number;
   classe: string;
   titulo: string;
+  ativa: boolean;
+  minimizada: boolean;
 }
 
-async function janelasDoX(): Promise<JanelaX[]> {
-  const saida = await rodar("wmctrl", ["-lpx"]);
-  const lista: JanelaX[] = [];
+interface ItemDaExtensao {
+  id?: number;
+  pid?: number;
+  wm_class?: string;
+  wm_class_instance?: string;
+  title?: string;
+  window_type?: number;
+  focus?: boolean;
+  minimized?: boolean;
+}
+
+function chamarExtensao(metodo: string, assinatura?: string, valor?: string): Promise<string> {
+  const argumentos = ["--user", "--json=short", "call", DESTINO, CAMINHO, INTERFACE, metodo];
+  if (assinatura && valor !== undefined) argumentos.push(assinatura, valor);
+  return rodar("busctl", argumentos);
+}
+
+async function textoDaExtensao(metodo: string, assinatura?: string, valor?: string): Promise<string> {
+  const resposta = JSON.parse(await chamarExtensao(metodo, assinatura, valor)) as { data?: unknown[] };
+  const texto = resposta.data?.[0];
+  if (typeof texto !== "string") throw new Error("resposta_invalida");
+  return texto;
+}
+
+const titulosEmCache = new Map<number, { titulo: string; quando: number }>();
+
+async function tituloDaJanela(id: number): Promise<string> {
+  const guardado = titulosEmCache.get(id);
+  if (guardado && Date.now() - guardado.quando < 3000) return guardado.titulo;
+  const titulo = await textoDaExtensao("GetTitle", "u", String(id)).catch(() => "");
+  titulosEmCache.set(id, { titulo, quando: Date.now() });
+  if (titulosEmCache.size > 200) for (const [chave, v] of titulosEmCache) if (Date.now() - v.quando > 30_000) titulosEmCache.delete(chave);
+  return titulo;
+}
+
+async function janelasDaExtensao(): Promise<JanelaBruta[]> {
+  const itens = JSON.parse(await textoDaExtensao("List")) as ItemDaExtensao[];
+  const normais = itens.filter((i) => typeof i.id === "number" && (i.window_type === undefined || i.window_type === 0));
+  return Promise.all(
+    normais.map(async (i) => ({
+      id: i.id as number,
+      pid: Number(i.pid) || 0,
+      classe: i.wm_class || i.wm_class_instance || "",
+      titulo: (typeof i.title === "string" && i.title) || (await tituloDaJanela(i.id as number)) || i.wm_class || "",
+      ativa: i.focus === true,
+      minimizada: i.minimized === true,
+    })),
+  );
+}
+
+// ---------- fonte 2: wmctrl (X11 e XWayland) ----------
+
+async function janelasDoX11(): Promise<JanelaBruta[]> {
+  const [saida, raiz] = await Promise.all([rodar("wmctrl", ["-lpx"]), rodar("xprop", ["-root", "_NET_ACTIVE_WINDOW"]).catch(() => "")]);
+  const ativa = /0x([0-9a-f]+)/i.exec(raiz);
+  const idAtiva = ativa ? parseInt(ativa[1] ?? "0", 16) : 0;
+  const brutas: { id: number; pid: number; classe: string; titulo: string }[] = [];
   for (const linha of saida.split("\n")) {
     const m = /^(0x[0-9a-f]+)\s+(-?\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*(.*)$/i.exec(linha);
     if (!m || m[2] === "-1") continue;
     const titulo = (m[6] ?? "").trim();
     if (!titulo) continue;
-    lista.push({ id: parseInt(m[1] ?? "0", 16), pid: Number(m[3]), classe: m[4] ?? "", titulo });
+    brutas.push({ id: parseInt(m[1] ?? "0", 16), pid: Number(m[3]), classe: m[4] ?? "", titulo });
   }
-  return lista;
+  const minimizadas = await Promise.all(brutas.map((j) => rodar("xprop", ["-id", `0x${j.id.toString(16)}`, "_NET_WM_STATE"]).then((s) => s.includes("_NET_WM_STATE_HIDDEN"), () => false)));
+  return brutas.map((j, i) => ({ ...j, ativa: j.id === idAtiva, minimizada: minimizadas[i] ?? false }));
 }
 
-async function janelaAtiva(): Promise<number> {
-  const saida = await rodar("xprop", ["-root", "_NET_ACTIVE_WINDOW"]).catch(() => "");
-  const m = /0x([0-9a-f]+)/i.exec(saida);
-  return m ? parseInt(m[1] ?? "0", 16) : 0;
-}
+// ---------- montagem da lista ----------
 
-async function estaMinimizada(id: number): Promise<boolean> {
-  const saida = await rodar("xprop", ["-id", `0x${id.toString(16)}`, "_NET_WM_STATE"]).catch(() => "");
-  return saida.includes("_NET_WM_STATE_HIDDEN");
-}
-
-let ultimaFrente = 0;
+type Fonte = "extensao" | "x11";
+let fonte: Fonte = "x11";
+let extensaoIndisponivelAte = 0;
+let ultimaFrente: { fonte: Fonte; id: number } | null = null;
 let emCache: { quando: number; dados: Promise<{ janelas: unknown[] }> } | null = null;
 
+async function coletar(): Promise<JanelaBruta[]> {
+  if (Date.now() >= extensaoIndisponivelAte) {
+    try {
+      const lista = await janelasDaExtensao();
+      fonte = "extensao";
+      return lista;
+    } catch {
+      // Sem a extensão (ou sem D-Bus do Shell): tenta de novo só daqui a 15 s.
+      extensaoIndisponivelAte = Date.now() + 15_000;
+    }
+  }
+  fonte = "x11";
+  return janelasDoX11();
+}
+
 async function montarLista(): Promise<{ janelas: unknown[] }> {
-  const [brutas, ativa] = await Promise.all([janelasDoX(), janelaAtiva()]);
-  const programas = new Map(brutas.map((j) => [j.id, lerArquivo(`/proc/${j.pid}/comm`) ?? ""]));
+  const brutas = await coletar();
+  const programas = new Map(brutas.map((j) => [j.id, j.pid > 0 ? (lerArquivo(`/proc/${j.pid}/comm`) ?? "") : ""]));
+  const emFoco = brutas.find((j) => j.ativa && !j.minimizada);
   // Quando o foco está numa janela do próprio Niko, vale a última janela de fora, como no Windows.
-  if (ativa !== 0 && programas.get(ativa) !== "niko") ultimaFrente = ativa;
-  const frente = programas.get(ativa) === "niko" ? ultimaFrente : ativa;
-  const minimizadas = await Promise.all(brutas.map((j) => estaMinimizada(j.id)));
-  const janelas = brutas.flatMap((j, i) => {
+  if (emFoco && programas.get(emFoco.id) !== "niko") ultimaFrente = { fonte, id: emFoco.id };
+  const idFrente = emFoco && programas.get(emFoco.id) === "niko" ? (ultimaFrente?.fonte === fonte ? ultimaFrente.id : 0) : (emFoco?.id ?? 0);
+  const janelas = brutas.flatMap((j) => {
     const programa = programas.get(j.id) ?? "";
     if (programa === "niko") return [];
     const app = acharApp(j.classe, programa);
-    const minimizada = minimizadas[i] ?? false;
     let caminho: string | null = null;
-    try {
-      caminho = readlinkSync(`/proc/${j.pid}/exe`);
-    } catch {
-      caminho = null;
+    if (j.pid > 0) {
+      try {
+        caminho = readlinkSync(`/proc/${j.pid}/exe`);
+      } catch {
+        caminho = null;
+      }
     }
-    return [{ id: String(j.id), pid: j.pid, titulo: j.titulo, minimizada, ativa: j.id === frente && !minimizada, app: programa, nome: app?.nome ?? programa ?? j.classe, caminho, icone: app ? iconeDe(app.icone) : null }];
+    return [{ id: String(j.id), pid: j.pid, titulo: j.titulo, minimizada: j.minimizada, ativa: j.id === idFrente && !j.minimizada, app: programa || j.classe, nome: app?.nome ?? (programa || j.classe), caminho, icone: app ? iconeDe(app.icone) : null }];
   });
   return { janelas };
 }
@@ -171,8 +244,12 @@ export async function pedirJanelasLinux(acao: "listar" | "focar" | "minimizar" |
   if (acao === "listar") return listar().catch(() => ({ janelas: [] }));
   const id = Number(janela);
   if (!Number.isSafeInteger(id) || id <= 0) throw new Error("janela_invalida");
-  const hex = `0x${id.toString(16)}`;
   emCache = null;
+  if (fonte === "extensao") {
+    const metodo = { focar: "Activate", minimizar: "Minimize", fechar: "Close" }[acao];
+    return { ok: await funcionou(chamarExtensao(metodo, "u", String(id))) };
+  }
+  const hex = `0x${id.toString(16)}`;
   if (acao === "focar") return { ok: await funcionou(rodar("wmctrl", ["-i", "-a", hex])) };
   if (acao === "fechar") return { ok: await funcionou(rodar("wmctrl", ["-i", "-c", hex])) };
   const ok = (await funcionou(rodar("xdotool", ["windowminimize", String(id)]))) || (await funcionou(rodar("wmctrl", ["-i", "-r", hex, "-b", "add,hidden"])));
