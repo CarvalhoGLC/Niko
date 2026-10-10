@@ -121,7 +121,7 @@ function PreviaJanelas({ lista, esquerda, aoEntrar, aoSair, aoFocar, aoFechar }:
 
 function AppsDoWindows({ mouseX, ampliar, ativo, monitor }: { mouseX: MotionValue<number>; ampliar: boolean; ativo: boolean; monitor?: string }) {
   const [todosOsApps, atualizar] = usarAppsAbertos(ativo);
-  const apps = monitor ? todosOsApps.filter((a) => a.monitor === monitor) : todosOsApps;
+  const apps = monitor && todosOsApps.some((a) => a.monitor !== undefined) ? todosOsApps.filter((a) => a.monitor === monitor) : todosOsApps;
   const [previa, setPrevia] = useState<{ chave: string; centro: number; esquerdaDock: number } | null>(null);
   const relogioAbrir = useRef<number | undefined>(undefined);
   const relogioFechar = useRef<number | undefined>(undefined);
