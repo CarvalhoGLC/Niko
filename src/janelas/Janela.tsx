@@ -27,6 +27,7 @@ interface Props {
   children: ReactNode;
   idCamada?: string;
   nativa?: boolean;
+  className?: string;
 }
 
 const DIRECAO_NATIVA = { n: "North", s: "South", l: "East", o: "West", nl: "NorthEast", no: "NorthWest", sl: "SouthEast", so: "SouthWest" } as const;
@@ -57,6 +58,7 @@ export function Janela({
   children,
   idCamada,
   nativa = false,
+  className = "",
 }: Props) {
   const arraste = useRef<{ x: number; y: number; g: Geometria; direcao?: Direcao } | null>(null);
   const elemento = useRef<HTMLDivElement>(null);
@@ -141,7 +143,7 @@ export function Janela({
   return (
     <motion.div
       ref={elemento}
-      className={`janela ${maximizada ? "janela-maximizada" : ""} ${nativa ? "janela-nativa" : ""}`}
+      className={`janela ${maximizada ? "janela-maximizada" : ""} ${nativa ? "janela-nativa" : ""} ${className}`}
       role="dialog"
       aria-label={rotuloAcessivel}
       style={nativa ? { zIndex: z } : { left: g.x, top: g.y, width: g.w, height: g.h, zIndex: z }}

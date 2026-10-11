@@ -2,6 +2,9 @@ import { create } from "zustand";
 import type { EventoClaude, FerramentaDeCodigo, RegraSugerida } from "../ponte/claudeCode";
 import { alteracaoDaFerramenta, type AlteracaoDeArquivo } from "../utilitarios/diff";
 import { T } from "../textos/textos";
+import { tarefasDaEntrada } from "../modulos/escritorio/detalhesDaSessao";
+import { useEscritorioIas } from "./escritorioIas";
+import { metricasMaisRecentes, type MetricasDaSessao } from "../modulos/escritorio/metricasDaSessao";
 
 export type EstadoSessao = keyof typeof T.ilha.claude.estados;
 
@@ -13,6 +16,10 @@ export interface PassoClaude {
   detalhe?: string;
   hora: string;
   alteracao?: AlteracaoDeArquivo;
+  chamadaId?: string;
+  duracaoMs?: number;
+  resultado?: "concluido" | "falhou";
+  subagenteId?: string;
 }
 
 export interface SessaoClaude {
@@ -26,10 +33,15 @@ export interface SessaoClaude {
   resposta?: string;
   erro?: string;
   modo?: string;
+  modoAtualizadoEm?: string;
+  modoConfirmado?: boolean;
   modelo?: string;
+  metricas?: MetricasDaSessao;
   ferramentasUsadas: number;
   iniciadaEm: string;
   atualizadaEm: string;
+  tarefas?: { id: string; titulo: string; estado: "pending" | "in_progress" | "completed" }[];
+  subagentes?: { id: string; tipo: string; estado: "trabalhando" | "terminou"; iniciadaEm: string; atualizadaEm: string }[];
 }
 
 export interface PedidoDePermissao {
@@ -43,12 +55,35 @@ export interface PedidoDePermissao {
   recebidoEm: string;
   alteracao?: AlteracaoDeArquivo;
   sugestoes: RegraSugerida[];
+  perguntas?: PerguntaDoClaude[];
+}
+
+export interface PerguntaDoClaude {
+  pergunta: string;
+  titulo: string;
+  varias: boolean;
+  opcoes: { rotulo: string; descricao: string }[];
+}
+
+export function perguntasDaEntrada(ferramenta: string, entrada: Record<string, unknown>): PerguntaDoClaude[] | undefined {
+  if (ferramenta !== "AskUserQuestion" || !Array.isArray(entrada.questions)) return undefined;
+  const perguntas: PerguntaDoClaude[] = [];
+  for (const q of entrada.questions) {
+    const p = (q ?? {}) as Record<string, unknown>;
+    const opcoes = (Array.isArray(p.options) ? p.options : [])
+      .map((o) => (o ?? {}) as Record<string, unknown>)
+      .filter((o) => texto(o.label))
+      .map((o) => ({ rotulo: texto(o.label), descricao: texto(o.description) }));
+    if (!texto(p.question) || opcoes.length === 0) return undefined;
+    perguntas.push({ pergunta: texto(p.question), titulo: texto(p.header), varias: p.multiSelect === true, opcoes });
+  }
+  return perguntas.length ? perguntas : undefined;
 }
 
 const MAXIMO_PASSOS = 80;
 
 export type MotivoDeEncerramento = keyof typeof T.ilha.claude.pedidoEncerrado;
-const MAXIMO_SESSOES = 8;
+const MAXIMO_SESSOES_INATIVAS = 8;
 const CAMPOS_ALVO = ["command", "file_path", "path", "url", "query", "pattern", "prompt", "description"] as const;
 
 /** "claude-opus-4-7[1m]" vira "Opus 4.7"; "claude-3-5-sonnet-20241022" vira "Sonnet 3.5"; o resto fica como veio. */
@@ -195,6 +230,42 @@ export const useClaudeCode = create<EstadoClaude>((set, get) => ({
 
   aplicar: (e) => {
     if (e.evento === "NikoConectado" || jaFoiAplicado(e.id)) return;
+    if (e.evento === "NikoSessoesAtuais") {
+      const ids = e.dados.sessoes;
+      const idsPedidos = e.dados.pedidos;
+      if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string") || !Array.isArray(idsPedidos) || !idsPedidos.every((id) => typeof id === "string")) return;
+      const atuais = new Set(ids);
+      const atuaisPedidos = new Set(idsPedidos);
+      const estados = new Map<string, { estado: EstadoSessao; atualizadaEm: string }>();
+      for (const valor of Array.isArray(e.dados.estados) ? e.dados.estados : []) {
+        if (!valor || typeof valor !== "object") continue;
+        const item = valor as Record<string, unknown>;
+        if (typeof item.sessao !== "string" || typeof item.estado !== "string" || !Object.hasOwn(T.ilha.claude.estados, item.estado) || typeof item.atualizadaEm !== "string" || !Number.isFinite(Date.parse(item.atualizadaEm))) continue;
+        const anterior = estados.get(item.sessao);
+        if (!anterior || Date.parse(item.atualizadaEm) >= Date.parse(anterior.atualizadaEm)) estados.set(item.sessao, { estado: item.estado as EstadoSessao, atualizadaEm: item.atualizadaEm });
+      }
+      set((s) => {
+        const ordem = s.ordem.filter((id) => atuais.has(id));
+        const pedidos = s.pedidos.filter((p) => atuais.has(p.sessao) && atuaisPedidos.has(p.pedidoId));
+        const sessoes = Object.fromEntries(ordem.map((id) => {
+          let sessao = s.sessoes[id];
+          const informado = estados.get(id);
+          if (informado && Date.parse(informado.atualizadaEm) >= Date.parse(sessao.atualizadaEm)) {
+            sessao = { ...sessao, ...informado };
+          }
+          return [id, sessao.estado === "aprovacao" && !pedidos.some((p) => p.sessao === id) ? { ...sessao, estado: "esperando" as const } : sessao];
+        }));
+        return { sessoes, ordem, pedidos, focada: s.focada && atuais.has(s.focada) ? s.focada : ordem[0] ?? null };
+      });
+      return;
+    }
+    useEscritorioIas.getState().registrar({ ...e, cwd: e.cwd || get().sessoes[e.sessao]?.cwd || "" });
+    if (e.evento === "NikoMetadadosSessao") {
+      const atual = get().sessoes[e.sessao];
+      const metricas = metricasMaisRecentes(atual?.metricas, e.dados.metricas);
+      if (atual && metricas !== atual.metricas) set((s) => ({ sessoes: { ...s.sessoes, [e.sessao]: { ...s.sessoes[e.sessao], metricas } } }));
+      return;
+    }
     if (e.evento === "NikoPedidoEncerrado") {
       if (e.pedidoId) get().removerPedido(e.pedidoId);
       const motivo = texto(e.dados.motivo);
@@ -229,7 +300,18 @@ export const useClaudeCode = create<EstadoClaude>((set, get) => ({
         iniciadaEm: e.recebidoEm,
         atualizadaEm: e.recebidoEm,
       };
-      const sessao: SessaoClaude = { ...base, cwd: e.cwd || base.cwd, projeto: e.cwd ? nomeDoProjeto(e.cwd, nomeReserva) : base.projeto, atualizadaEm: e.recebidoEm, modo: texto(d.permission_mode) || base.modo, modelo: texto(d.model) || base.modelo };
+      const modoInformado = texto(d.permission_mode);
+      const modoMaisRecente = Boolean(modoInformado) && (!base.modoAtualizadoEm || Date.parse(e.recebidoEm) >= Date.parse(base.modoAtualizadoEm));
+      const reiniciouSemModo = e.evento === "SessionStart" && !modoInformado;
+      const sessao: SessaoClaude = {
+        ...base, cwd: e.cwd || base.cwd, projeto: e.cwd ? nomeDoProjeto(e.cwd, nomeReserva) : base.projeto,
+        atualizadaEm: Date.parse(e.recebidoEm) < Date.parse(base.atualizadaEm) ? base.atualizadaEm : e.recebidoEm,
+        modo: modoMaisRecente ? modoInformado : reiniciouSemModo ? undefined : base.modo,
+        modoAtualizadoEm: modoMaisRecente ? e.recebidoEm : reiniciouSemModo ? undefined : base.modoAtualizadoEm,
+        modoConfirmado: modoMaisRecente,
+        modelo: texto(d.model) || base.modelo,
+        metricas: metricasMaisRecentes(base.metricas, d.metricas),
+      };
       const passos = [...sessao.passos];
       let pedidos = s.pedidos;
       switch (e.evento) {
@@ -255,11 +337,27 @@ export const useClaudeCode = create<EstadoClaude>((set, get) => ({
           sessao.ferramentasUsadas += 1;
           const passo = novoPasso(e, "ferramenta", rotuloDaFerramenta(ferramenta), encurtarCaminho(alvoDaFerramenta(entrada)).slice(0, 300), ferramenta);
           passo.alteracao = alteracaoDaFerramenta(ferramenta, entrada);
+          passo.chamadaId = texto(d.tool_use_id) || undefined;
+          passo.subagenteId = texto(d.agent_id) || undefined;
           passos.push(passo);
+          break;
+        }
+        case "PostToolUse": {
+          const chamadaId = texto(d.tool_use_id);
+          const passo = chamadaId ? passos.findLast((p) => p.chamadaId === chamadaId && p.tipo === "ferramenta") : undefined;
+          if (passo) {
+            const ms = d.duration_ms;
+            passos[passos.indexOf(passo)] = { ...passo, resultado: "concluido", duracaoMs: typeof ms === "number" && Number.isFinite(ms) && ms >= 0 && ms < 86400_000 ? ms : undefined };
+          }
+          const tarefas = tarefasDaEntrada(texto(d.tool_name), d.tool_input);
+          if (tarefas) sessao.tarefas = tarefas;
           break;
         }
         case "PostToolUseFailure": {
           const ferramenta = texto(d.tool_name) || "Tool";
+          const chamadaId = texto(d.tool_use_id);
+          const indice = chamadaId ? passos.findLastIndex((p) => p.chamadaId === chamadaId) : -1;
+          if (indice >= 0) passos[indice] = { ...passos[indice], resultado: "falhou" };
           passos.push(novoPasso(e, "falha", `${T.ilha.claude.falhaFerramenta}: ${rotuloDaFerramenta(ferramenta)}`, texto(d.error).slice(0, 300), ferramenta));
           break;
         }
@@ -268,7 +366,7 @@ export const useClaudeCode = create<EstadoClaude>((set, get) => ({
           const ferramenta = texto(d.tool_name) || "Tool";
           const entrada = (d.tool_input ?? {}) as Record<string, unknown>;
           sessao.estado = "aprovacao";
-          pedidos = [...pedidos.filter((p) => p.pedidoId !== e.pedidoId), { pedidoId: e.pedidoId, ferramentaDeCodigo: sessao.ferramenta, sessao: e.sessao, projeto: sessao.projeto, ferramenta, alvo: alvoDaFerramenta(entrada), entrada: formatarEntrada(entrada), recebidoEm: e.recebidoEm, alteracao: alteracaoDaFerramenta(ferramenta, entrada), sugestoes: sugestoesDoEvento(d) }];
+          pedidos = [...pedidos.filter((p) => p.pedidoId !== e.pedidoId), { pedidoId: e.pedidoId, ferramentaDeCodigo: sessao.ferramenta, sessao: e.sessao, projeto: sessao.projeto, ferramenta, alvo: alvoDaFerramenta(entrada), entrada: formatarEntrada(entrada), recebidoEm: e.recebidoEm, alteracao: alteracaoDaFerramenta(ferramenta, entrada), sugestoes: sugestoesDoEvento(d), perguntas: sessao.ferramenta === "claude" ? perguntasDaEntrada(ferramenta, entrada) : undefined }];
           break;
         }
         case "Notification": {
@@ -293,17 +391,29 @@ export const useClaudeCode = create<EstadoClaude>((set, get) => ({
           sessao.erro = texto(d.error_message) || texto(d.error_type);
           passos.push(novoPasso(e, "erro", T.ilha.claude.estados.erro, sessao.erro.slice(0, 300)));
           break;
-        case "SubagentStart":
+        case "SubagentStart": {
+          const id = texto(d.agent_id);
+          if (id) sessao.subagentes = [...(sessao.subagentes ?? []).filter((a) => a.id !== id), { id, tipo: texto(d.agent_type).slice(0, 80), estado: "trabalhando", iniciadaEm: e.recebidoEm, atualizadaEm: e.recebidoEm }].slice(-30) as SessaoClaude["subagentes"];
           passos.push(novoPasso(e, "subagente", T.ilha.claude.subagenteComecou(texto(d.agent_type) || "")));
           break;
-        case "SubagentStop":
+        }
+        case "SubagentStop": {
+          const id = texto(d.agent_id);
+          sessao.subagentes = sessao.subagentes?.map((a) => a.id === id ? { ...a, estado: "terminou", atualizadaEm: e.recebidoEm } : a);
           passos.push(novoPasso(e, "subagente", T.ilha.claude.subagenteTerminou(texto(d.agent_type) || "")));
           break;
+        }
         default:
           return {};
       }
       sessao.passos = passos.slice(-MAXIMO_PASSOS);
-      const ordem = [e.sessao, ...s.ordem.filter((x) => x !== e.sessao)].slice(0, MAXIMO_SESSOES);
+      let inativas = 0;
+      const ordem = [e.sessao, ...s.ordem.filter((x) => x !== e.sessao)].filter((id) => {
+        const atual = id === e.sessao ? sessao : s.sessoes[id];
+        if (!atual) return false;
+        if (pedidos.some((p) => p.sessao === id) || (atual.estado !== "ociosa" && atual.estado !== "terminou")) return true;
+        return ++inativas <= MAXIMO_SESSOES_INATIVAS;
+      });
       const sessoes = Object.fromEntries(ordem.map((id) => [id, id === e.sessao ? sessao : s.sessoes[id]]).filter(([, v]) => v)) as Record<string, SessaoClaude>;
       return { sessoes, ordem, pedidos, focada: s.focada && sessoes[s.focada] ? s.focada : e.sessao };
     });

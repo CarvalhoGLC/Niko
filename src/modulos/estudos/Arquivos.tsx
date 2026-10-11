@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Download, Eye, ExternalLink, File, FileArchive, FileAudio, FileImage, FileSpreadsheet, FileText, FileVideo, LoaderCircle, Presentation, ScanText, Search, Trash2, Upload } from "lucide-react";
 import { Botao, ConfirmarModal, Modal, Vazio, AvisoFaixa } from "../../componentes/basicos";
+import { Paginacao, usarPaginacao } from "../../componentes/Paginacao";
 import { ZonaDeSoltar, useArrastarArquivos } from "../../componentes/AnexosChat";
 import { useInterface } from "../../estado/interface";
 import { useComunicacao } from "../../estado/comunicacao";
@@ -277,21 +278,20 @@ export function Arquivos({ materia }: { materia: Materia }) {
     const termo = busca.trim().toLocaleLowerCase("pt-BR");
     return termo ? arquivos.filter((a) => a.nome.toLocaleLowerCase("pt-BR").includes(termo)) : arquivos;
   }, [arquivos, busca]);
+  const paginas = usarPaginacao(visiveis, 15, `${busca}|${materia.id}`);
 
   const total = arquivos.reduce((s, a) => s + a.tamanho, 0);
 
   return (
-    <div ref={area} className="coluna arquivos-materia">
+    <div ref={area} className="est-arquivos">
       <ZonaDeSoltar ativo={arrastando} agente="tutor" texto={T.estudos.arquivos.solte} tipos={T.estudos.arquivos.tipos} />
-      <div className="linha arquivos-topo">
-        <Botao variante="primario" icone={<Upload size={14} />} onClick={() => entrada.current?.click()}>{T.estudos.arquivos.adicionar}</Botao>
-        {arquivos.length > 4 && (
-          <label className="arquivos-busca">
-            <Search size={14} />
-            <input className="campo" value={busca} placeholder={T.estudos.arquivos.buscar} aria-label={T.estudos.arquivos.buscar} onChange={(e) => setBusca(e.target.value)} />
-          </label>
-        )}
-        {arquivos.length > 0 && <span className="texto-3 empurrar">{T.estudos.arquivos.quantidade(arquivos.length)} . {formatarTamanho(total)}</span>}
+      <div className="est-arquivos-soltar">
+        <span className="est-arquivos-soltar-icone"><Upload size={20} /></span>
+        <span className="est-arquivos-soltar-texto">
+          <b>{T.estudos.arquivosArraste}</b>
+          <span>{T.estudos.arquivos.dica}</span>
+        </span>
+        <Botao variante="primario" icone={<Upload size={13} />} onClick={() => entrada.current?.click()}>{T.estudos.arquivos.adicionar}</Botao>
         <input
           ref={entrada}
           type="file"
@@ -304,72 +304,76 @@ export function Arquivos({ materia }: { materia: Materia }) {
           }}
         />
       </div>
-      <span className="campo-dica">{T.estudos.arquivos.dica}</span>
       {falhaLista && <AvisoFaixa tipo="erro">{T.estudos.arquivos.falhaLista}</AvisoFaixa>}
-
-      {envios.length > 0 && (
-        <div className="lista">
-          {envios.map((e) => (
-            <div key={e.id} className="lista-item arquivo-enviando">
-              <LoaderCircle size={16} className="girando" />
-              <div className="lista-item-principal">
-                <span className="lista-item-titulo">{e.nome}</span>
-                <span className="lista-item-sub">{T.estudos.arquivos.enviando} . {formatarTamanho(e.tamanho)}</span>
-              </div>
-            </div>
-          ))}
+      {arquivos.length > 0 && (
+        <div className="est-arquivos-barra">
+          <span>{T.estudos.arquivos.quantidade(arquivos.length)} · {formatarTamanho(total)}</span>
+          <label className="est-campo-icone est-arquivos-busca">
+            <Search size={12} />
+            <input className="campo" value={busca} placeholder={T.estudos.arquivos.buscar} aria-label={T.estudos.arquivos.buscar} onChange={(e) => setBusca(e.target.value)} />
+          </label>
         </div>
       )}
+
+      {envios.map((e) => (
+        <div key={e.id} className="est-arquivo est-arquivo-enviando">
+          <span className="est-arquivo-tipo"><LoaderCircle size={14} className="girando" /></span>
+          <span className="est-arquivo-nome">
+            <span className="cortar">{e.nome}</span>
+            <span className="est-arquivo-info">{T.estudos.arquivos.enviando} · {formatarTamanho(e.tamanho)}</span>
+          </span>
+        </div>
+      ))}
 
       {carregado && arquivos.length === 0 && envios.length === 0 && !falhaLista ? (
         <Vazio icone={<Upload size={28} />} titulo={T.estudos.arquivos.vazio} texto={T.estudos.arquivos.vazioDica} />
       ) : visiveis.length === 0 && busca ? (
         <Vazio icone={<Search size={28} />} titulo={T.estudos.arquivos.semResultado} />
       ) : (
-        <div className="lista">
-          {visiveis.map((a) => {
-            const temPrevia = formaDeVer(a.extensao) !== "programa";
+        <div className="est-arquivos-lista">
+          {paginas.visiveis.map((a) => {
+            const forma = formaDeVer(a.extensao);
+            const temPrevia = forma !== "programa";
             return (
-              <div key={a.id} className="arquivo-bloco">
-              <div className="lista-item arquivo-item">
-                <span className="arquivo-icone" data-extensao={a.extensao}>
-                  <IconeDoArquivo extensao={a.extensao} />
-                </span>
-                <button type="button" className="lista-item-principal arquivo-nome" onClick={() => (temPrevia ? setVendo(a) : abrir(a))} title={temPrevia ? T.estudos.arquivos.ver : T.estudos.arquivos.abrirNoPrograma}>
-                  <span className="lista-item-titulo">{a.nome}</span>
-                  <span className="lista-item-sub">
-                    {a.extensao.toUpperCase()} . {formatarTamanho(a.tamanho)} . {formatar(a.criadoEm, "d 'de' MMM yyyy")}
+              <div key={a.id} className="est-arquivo-bloco" data-aberto={acoesAbertas === a.id ? "sim" : "nao"}>
+                <div className="est-arquivo">
+                  <span className="est-arquivo-tipo" data-forma={forma} data-extensao={a.extensao}>{a.extensao.slice(0, 4).toUpperCase()}</span>
+                  <button type="button" className="est-arquivo-nome" onClick={() => (temPrevia ? setVendo(a) : abrir(a))} title={temPrevia ? T.estudos.arquivos.ver : T.estudos.arquivos.abrirNoPrograma}>
+                    <span className="cortar">{a.nome}</span>
+                    <span className="est-arquivo-info">{formatarTamanho(a.tamanho)} · {formatar(a.criadoEm, "d 'de' MMM yyyy")}</span>
+                  </button>
+                  <span className="est-arquivo-acoes">
+                    {temPrevia ? (
+                      <Botao pequeno className="est-botao-contorno" icone={<Eye size={12} />} onClick={() => setVendo(a)}>{T.estudos.arquivos.ver}</Botao>
+                    ) : (
+                      <Botao pequeno className="est-botao-contorno" icone={<ExternalLink size={12} />} onClick={() => abrir(a)}>{T.estudos.arquivos.abrirNoPrograma}</Botao>
+                    )}
+                    {podeExtrairTexto(a.nome) &&
+                      (lendo?.id === a.id ? (
+                        <span className="est-arquivo-lendo">
+                          <LoaderCircle size={12} className="girando" />
+                          {T.estudos.arquivos.lendoPaginas(lendo.progresso)}
+                        </span>
+                      ) : (
+                        <Botao pequeno className="est-botao-contorno" icone={<ScanText size={12} />} aria-label={T.estudos.arquivos.analisarRotulo(a.nome)} aria-expanded={acoesAbertas === a.id} disabled={!!lendo} onClick={() => setAcoesAbertas((x) => (x === a.id ? null : a.id))}>{T.estudos.arquivos.analisar}</Botao>
+                      ))}
+                    <Botao pequeno soIcone className="est-botao-contorno" icone={<Download size={12} />} aria-label={T.estudos.arquivos.baixar} title={T.estudos.arquivos.baixar} onClick={() => baixar(a)} />
+                    <Botao pequeno soIcone variante="fantasma" icone={<Trash2 size={12} />} aria-label={T.estudos.arquivos.excluir} title={T.estudos.arquivos.excluir} onClick={() => setExcluindo(a)} />
                   </span>
-                </button>
-                {temPrevia ? (
-                  <Botao pequeno soIcone variante="fantasma" icone={<Eye size={14} />} aria-label={T.estudos.arquivos.ver} title={T.estudos.arquivos.ver} onClick={() => setVendo(a)} />
-                ) : (
-                  <Botao pequeno soIcone variante="fantasma" icone={<ExternalLink size={14} />} aria-label={T.estudos.arquivos.abrirNoPrograma} title={T.estudos.arquivos.abrirNoPrograma} onClick={() => abrir(a)} />
-                )}
-                {podeExtrairTexto(a.nome) &&
-                  (lendo?.id === a.id ? (
-                    <span className="texto-3 arquivo-lendo">
-                      <LoaderCircle size={13} className="girando" />
-                      {T.estudos.arquivos.lendoPaginas(lendo.progresso)}
-                    </span>
-                  ) : (
-                    <Botao pequeno soIcone variante={acoesAbertas === a.id ? "secundario" : "fantasma"} icone={<ScanText size={14} />} aria-label={T.estudos.arquivos.analisarRotulo(a.nome)} title={T.estudos.arquivos.analisar} aria-expanded={acoesAbertas === a.id} disabled={!!lendo} onClick={() => setAcoesAbertas((x) => (x === a.id ? null : a.id))} />
-                  ))}
-                <Botao pequeno soIcone variante="fantasma" icone={<Download size={14} />} aria-label={T.estudos.arquivos.baixar} title={T.estudos.arquivos.baixar} onClick={() => baixar(a)} />
-                <Botao pequeno soIcone variante="fantasma" icone={<Trash2 size={14} />} aria-label={T.estudos.arquivos.excluir} title={T.estudos.arquivos.excluir} onClick={() => setExcluindo(a)} />
-              </div>
-              {acoesAbertas === a.id && (
-                <div className="arquivo-acoes" role="group" aria-label={T.estudos.arquivos.analisarRotulo(a.nome)}>
-                  {(Object.keys(T.chat.anexos.acoes) as AcaoAnexo[]).map((acao) => (
-                    <Botao key={acao} pequeno variante={acao === "extrair" ? "fantasma" : "secundario"} disabled={!!lendo} onClick={() => void analisar(a, acao)}>
-                      {T.chat.anexos.acoes[acao]}
-                    </Botao>
-                  ))}
                 </div>
-              )}
+                {acoesAbertas === a.id && (
+                  <div className="est-arquivo-analise" role="group" aria-label={T.estudos.arquivos.analisarRotulo(a.nome)}>
+                    {(Object.keys(T.chat.anexos.acoes) as AcaoAnexo[]).map((acao) => (
+                      <Botao key={acao} pequeno variante={acao === "extrair" ? "fantasma" : "secundario"} disabled={!!lendo} onClick={() => void analisar(a, acao)}>
+                        {T.chat.anexos.acoes[acao]}
+                      </Botao>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
+          <Paginacao {...paginas} />
         </div>
       )}
 

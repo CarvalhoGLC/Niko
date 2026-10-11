@@ -1,16 +1,18 @@
 import { Component, lazy, Suspense, useState, type ReactNode } from "react";
-import { Box, LayoutGrid, MessageSquare, X } from "lucide-react";
+import { Box, Building2, LayoutGrid, MessageSquare, SquareTerminal } from "lucide-react";
+import { useClaudeCode } from "../../estado/claudeCode";
 import { CabecalhoAba } from "../../componentes/CabecalhoAba";
-import { Cartao, Botao, Segmentado, AvisoFaixa } from "../../componentes/basicos";
+import { Segmentado, AvisoFaixa } from "../../componentes/basicos";
 import { Personagem } from "../../personagens/Personagem";
 import { useAgentes, AGENTES } from "../../estado/agentes";
 import { useConfig } from "../../estado/configuracoes";
 import { useInterface } from "../../estado/interface";
 import { T } from "../../textos/textos";
-import { horarioRelativo } from "../../utilitarios/datas";
+import { formatar } from "../../utilitarios/datas";
 import { useComportamento, MESAS, LUGARES, type Acao } from "./comportamento";
 import { Pensamento } from "./Pensamento";
 import type { AgenteId } from "../../tipos";
+import { EscritorioIas } from "./EscritorioIas";
 
 const Cena3D = lazy(() => import("./Cena3D"));
 
@@ -28,6 +30,10 @@ const NOME_ACAO: Partial<Record<Acao, number>> = { cafe: 0, janela: 1, conversar
 
 function para2D([x, z]: [number, number]) {
   return { left: `${((x + 6) / 12) * 100}%`, top: `${((z + 4) / 8) * 100}%` };
+}
+
+function horaDaAcao(iso: string): string {
+  return new Date(iso).toDateString() === new Date().toDateString() ? formatar(iso, "HH:mm") : formatar(iso, "dd/MM");
 }
 
 function Sala2D({ comportamento, tarefas, aoEscolher }: { comportamento: ReturnType<typeof useComportamento>; tarefas: Record<AgenteId, string>; aoEscolher: (a: AgenteId) => void }) {
@@ -52,16 +58,17 @@ function Sala2D({ comportamento, tarefas, aoEscolher }: { comportamento: ReturnT
   );
 }
 
-export default function Escritorio() {
+function EscritorioNiko({ alternador }: { alternador: ReactNode }) {
   const modoLeve = useConfig((s) => s.modoLeveEscritorio);
   const definir = useConfig((s) => s.definir);
   const nomes = useConfig((s) => s.agentes.nomes);
   const cargos = useConfig((s) => s.agentes.cargos);
+  const favorito = useConfig((s) => s.agentes.favorito);
   const tarefas = useAgentes((s) => s.tarefaAtual);
   const atividades = useAgentes((s) => s.atividades);
   const irPara = useInterface((s) => s.irPara);
   const comportamento = useComportamento();
-  const [escolhido, setEscolhido] = useState<AgenteId | null>(null);
+  const [escolhido, setEscolhido] = useState<AgenteId>(favorito ?? AGENTES[0]);
   const escuro = document.documentElement.dataset.tema === "escuro";
 
   const legenda = (a: AgenteId) => {
@@ -72,11 +79,14 @@ export default function Escritorio() {
   };
 
   const reserva = <><AvisoFaixa tipo="alerta">{T.escritorio.falhou3d}</AvisoFaixa><Sala2D comportamento={comportamento} tarefas={tarefas} aoEscolher={setEscolhido} /></>;
+  const ultimas = atividades.filter((x) => x.agenteId === escolhido).slice(0, 5);
+  const estado = comportamento[escolhido].estado;
+  const tomAgora = estado === "erro" ? "erro" : estado === "alerta" ? "alerta" : "sucesso";
 
   return (
     <>
       <CabecalhoAba
-        titulo={T.escritorio.titulo}
+        titulo={T.escritorio.niko}
         subtitulo={T.escritorio.subtitulo}
         acoes={
           <Segmentado
@@ -87,56 +97,80 @@ export default function Escritorio() {
           />
         }
       />
-      <div className="escritorio">
-        <div className="escritorio-cena">
+      {alternador}
+      <section className="escritorio-palco">
+        <div className="escritorio-quadro" data-modo={modoLeve ? "leve" : "3d"}>
           {modoLeve ? (
             <Sala2D comportamento={comportamento} tarefas={tarefas} aoEscolher={setEscolhido} />
           ) : (
-            <LimiteErro reserva={reserva}>
-              <Suspense fallback={<div className="vazio" aria-busy="true">{T.escritorio.carregando3d}</div>}>
-                <Cena3D comportamento={comportamento} tarefas={tarefas} aoEscolher={setEscolhido} escuro={escuro} />
-              </Suspense>
-            </LimiteErro>
-          )}
-          {escolhido && (
-            <div className="escritorio-cartao cartao">
-              <div className="linha">
-                <Personagem agente={escolhido} tamanho={44} />
-                <div className="coluna" style={{ gap: 0, flex: 1 }}>
-                  <b>{nomes[escolhido]}</b>
-                  <span className="texto-3" style={{ fontSize: 11 }}>{cargos[escolhido]}: {T.agentes.areas[escolhido]}</span>
-                </div>
-                <Botao pequeno soIcone variante="fantasma" icone={<X size={14} />} aria-label={T.geral.fechar} onClick={() => setEscolhido(null)} />
-              </div>
-              <div className="coluna" style={{ gap: 2 }}>
-                <span className="rotulo-secao">{T.escritorio.tarefaAtual}</span>
-                <span>{legenda(escolhido)}</span>
-              </div>
-              <div className="coluna" style={{ gap: 2 }}>
-                <span className="rotulo-secao">{T.escritorio.ultimasAcoes}</span>
-                {atividades.filter((x) => x.agenteId === escolhido).slice(0, 5).map((x) => (
-                  <span key={x.id} className="texto-2 cortar" style={{ fontSize: 12 }}>{x.texto} . {horarioRelativo(x.data)}</span>
-                ))}
-                {!atividades.some((x) => x.agenteId === escolhido) && <span className="texto-3">{T.agentes.semAtividade}</span>}
-              </div>
-              <Botao variante="primario" icone={<MessageSquare size={14} />} onClick={() => irPara("chat", { agente: escolhido })}>{T.escritorio.conversar}</Botao>
-            </div>
+            <>
+              <LimiteErro reserva={reserva}>
+                <Suspense fallback={<div className="vazio" aria-busy="true">{T.escritorio.carregando3d}</div>}>
+                  <Cena3D comportamento={comportamento} tarefas={tarefas} aoEscolher={setEscolhido} escuro={escuro} />
+                </Suspense>
+              </LimiteErro>
+              <span className="escritorio-quadro-rotulo">{T.escritorio.dicaCena3d}</span>
+            </>
           )}
         </div>
-        <div className="lista-time">
-          {AGENTES.map((a) => (
-            <Cartao key={a} className="cartao-clicavel">
-              <button type="button" className="linha" style={{ width: "100%", textAlign: "left" }} onClick={() => setEscolhido(a)}>
-                <Personagem agente={a} tamanho={36} interativo={false} halo={false} estado={comportamento[a].estado} />
-                <div className="coluna" style={{ gap: 0, minWidth: 0 }}>
-                  <b>{nomes[a]}</b>
-                  <span className="texto-2 cortar" style={{ fontSize: 12 }}>{legenda(a)}</span>
-                </div>
+        <aside className="escritorio-painel" data-agente={escolhido}>
+          <div className="escritorio-time" role="group" aria-label={T.escritorio.escolherAgente}>
+            {AGENTES.map((a) => (
+              <button key={a} type="button" className="escritorio-time-botao" data-agente={a} aria-pressed={a === escolhido} title={`${nomes[a]}: ${legenda(a)}`} aria-label={nomes[a]} onClick={() => setEscolhido(a)}>
+                <Personagem agente={a} tamanho={38} interativo={false} halo={false} olhar={false} estado={comportamento[a].estado} />
               </button>
-            </Cartao>
-          ))}
-        </div>
-      </div>
+            ))}
+          </div>
+          <div className="escritorio-agente">
+            <span className="escritorio-agente-avatar">
+              <Personagem agente={escolhido} tamanho={62} halo={false} estado={estado} />
+            </span>
+            <span className="escritorio-agente-texto">
+              <b>{nomes[escolhido]}</b>
+              <span className="escritorio-agente-cargo">{cargos[escolhido]}</span>
+              <span className="escritorio-agente-area">{T.agentes.areas[escolhido]}</span>
+            </span>
+          </div>
+          <div className="escritorio-agora" data-tom={tomAgora}>
+            <span className="escritorio-agora-rotulo">{T.escritorio.tarefaAtual}</span>
+            <span className="escritorio-agora-texto privado">{legenda(escolhido)}</span>
+          </div>
+          <div className="escritorio-acoes">
+            <span className="escritorio-acoes-rotulo">{T.escritorio.ultimasAcoes}</span>
+            {ultimas.map((x) => (
+              <div key={x.id} className="escritorio-acao">
+                <span className="escritorio-acao-hora">{horaDaAcao(x.data)}</span>
+                <span className="escritorio-acao-texto privado">{x.texto}</span>
+              </div>
+            ))}
+            {ultimas.length === 0 && <span className="escritorio-acoes-vazio">{T.agentes.semAtividade}</span>}
+          </div>
+          <button type="button" className="botao botao-primario escritorio-conversar" onClick={() => irPara("chat", { agente: escolhido })}>
+            <MessageSquare size={14} />
+            {T.escritorio.conversar}
+          </button>
+        </aside>
+      </section>
     </>
   );
+}
+
+export default function Escritorio({ tipoInicial = "niko", demonstracaoInicial = false }: { tipoInicial?: "niko" | "ias"; demonstracaoInicial?: boolean } = {}) {
+  const [tipo, setTipo] = useState<"niko" | "ias">(tipoInicial);
+  const sessoes = useClaudeCode((s) => s.ordem.length);
+  const alternador = (
+    <div className="escritorio-troca" role="tablist" aria-label={T.escritorio.tipo}>
+      {([["niko", Building2, T.escritorio.niko, T.escritorio.trocaNiko], ["ias", SquareTerminal, T.escritorio.ias.curto, T.escritorio.trocaIas(sessoes)]] as const).map(([id, Icone, titulo, dica]) => (
+        <button key={id} type="button" role="tab" aria-selected={tipo === id} className="escritorio-troca-botao" onClick={() => setTipo(id)}>
+          <span className="escritorio-troca-icone"><Icone size={18} /></span>
+          <span className="escritorio-troca-texto"><b>{titulo}</b><small>{dica}</small></span>
+        </button>
+      ))}
+    </div>
+  );
+  return tipo === "niko" ? <EscritorioNiko alternador={alternador} /> : <>
+    <CabecalhoAba titulo={T.escritorio.ias.titulo} subtitulo={T.escritorio.ias.subtitulo} />
+    {alternador}
+    <EscritorioIas demonstracaoInicial={demonstracaoInicial} />
+  </>;
 }

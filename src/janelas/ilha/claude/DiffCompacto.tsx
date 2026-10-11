@@ -1,4 +1,7 @@
 import { useMemo } from "react";
+import { Code2 } from "lucide-react";
+import { claudeCode } from "../../../ponte/claudeCode";
+import { useIlha } from "../../../estado/ilha";
 import { linhasDoDiff, type AlteracaoDeArquivo, type LinhaDoDiff } from "../../../utilitarios/diff";
 import { T } from "../../../textos/textos";
 
@@ -9,7 +12,13 @@ function nomeCurto(caminho: string) {
   return partes.slice(-2).join("/");
 }
 
-export function DiffCompacto({ alteracao, maximo = 60 }: { alteracao: AlteracaoDeArquivo; maximo?: number }) {
+function abrirArquivo(cwd: string, arquivo: string) {
+  claudeCode.abrirArquivo(cwd, arquivo).catch((e: Error) => {
+    useIlha.getState().revelar({ texto: C.abrirFalhou[e.message] ?? C.abrirFalhou.outro, tipo: "alerta", marca: "claudecode", aba: "claude" }, 4500);
+  });
+}
+
+export function DiffCompacto({ alteracao, maximo = 60, cwd }: { alteracao: AlteracaoDeArquivo; maximo?: number; cwd?: string }) {
   const { linhas, mais, menos } = useMemo(() => {
     const todas: (LinhaDoDiff | { tipo: "separador"; texto: string })[] = [];
     let somaMais = 0;
@@ -33,6 +42,11 @@ export function DiffCompacto({ alteracao, maximo = 60 }: { alteracao: AlteracaoD
         {alteracao.novo && <span className="vsc-chip">{C.arquivoNovo}</span>}
         <span className="vsc-diff-mais">+{mais}</span>
         <span className="vsc-diff-menos">-{menos}</span>
+        {cwd && (
+          <button type="button" className="vsc-icone-botao vsc-diff-abrir" aria-label={C.abrirArquivo} title={C.abrirArquivo} onClick={() => abrirArquivo(cwd, alteracao.arquivo)}>
+            <Code2 size={12} />
+          </button>
+        )}
       </div>
       <div className="vsc-diff-corpo">
         {visiveis.map((l, i) =>

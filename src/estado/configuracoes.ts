@@ -4,17 +4,24 @@ import { armazenamento, chave } from "../ponte/armazenamento";
 import type { AgenteId, CartaoConfirmacao, Rota } from "../tipos";
 import type { CategoriaSom } from "../ponte/sons";
 import { FUNDO_DESTAQUE, hexValido, misturar } from "../utilitarios/cores";
+import type { Buscador } from "../utilitarios/buscaApps";
+import { ATALHOS_PADRAO, atalhosComPadrao, type AcaoGlobal } from "../utilitarios/atalhos";
+import { ASSISTIVE_PADRAO, validarAssistive, type ConfigAssistive } from "../janelas/assistive/regras";
+import { configuracoesValidas } from "../utilitarios/configuracoesValidas";
+import { objeto } from "../utilitarios/validacoes";
+import { aparenciaPadrao, type AparenciaAgente } from "../personagens/personalizacao";
+import { SEM_ACESSORIOS, type AcessoriosAgente } from "../personagens/acessorios";
 
 const DESTAQUE_ESCURO_PADRAO = "#a78bfa";
 
 export type Tema = "claro" | "escuro" | "sistema";
 export type Paleta = "padrao" | "areia" | "grafite" | "floresta" | "oceano";
 export type ModoBorda = "fixo" | "esconder" | "inteligente";
-export type AbaIlha = "hoje" | "midia" | "foco" | "chat" | "conexoes" | "avisos" | "claude";
+export type AbaIlha = "hoje" | "midia" | "foco" | "chat" | "conexoes" | "avisos" | "claude" | "time";
 export type VisaoIlha = AbaIlha | "captura";
 export type SecaoHoje = "agenda" | "tarefas" | "habitos";
 
-export const ABAS_ILHA: AbaIlha[] = ["hoje", "claude", "conexoes", "chat", "midia", "foco", "avisos"];
+export const ABAS_ILHA: AbaIlha[] = ["hoje", "time", "claude", "conexoes", "chat", "midia", "foco", "avisos"];
 const ABAS_JUNTADAS_NO_HOJE = ["hoje", "calendario", "habitos"];
 
 export function juntarAbasNoHoje(ordem: string[], blocos: Record<string, boolean>) {
@@ -68,6 +75,7 @@ export const GRUPO_DA_ROTA: Record<Rota, "principal" | "organizacao" | "ferramen
   consumo: "ferramentas",
   conquistas: "ferramentas",
   configuracoes: "ferramentas",
+  agentes: "principal",
 };
 
 export const BLOCOS_INICIO_PADRAO: { id: BlocoInicio; visivel: boolean }[] = [
@@ -104,7 +112,15 @@ export interface ConfigIlha {
   esconderSeg: number;
   notificacoes: "todas" | "importantes" | "nenhuma";
   laterais: boolean;
+  iconesDaBarra: Record<IconeDaBarra, boolean>;
+  monitor: string;
 }
+
+export type CategoriaDeAviso = "lembretes" | "habitos" | "estudos" | "financas" | "conexoes" | "codigo" | "conquistas" | "consumo";
+export const CATEGORIAS_DE_AVISO: CategoriaDeAviso[] = ["lembretes", "habitos", "estudos", "financas", "conexoes", "codigo", "conquistas", "consumo"];
+
+export type IconeDaBarra = "rede" | "volume" | "bateria";
+export const ICONES_DA_BARRA: IconeDaBarra[] = ["rede", "volume", "bateria"];
 
 export interface Configuracoes {
   nome: string;
@@ -122,15 +138,19 @@ export interface Configuracoes {
   gruposFechados: string[];
   blocosInicio: { id: BlocoInicio; visivel: boolean }[];
   ilha: ConfigIlha;
-  dock: { ativo: boolean; modo: ModoBorda; favoritos: Rota[]; atalhos: AtalhoDock[]; ampliar: boolean; fundo: string; opacidade: number; monitores: string };
+  assistive: ConfigAssistive;
+  dock: { ativo: boolean; modo: ModoBorda; favoritos: Rota[]; atalhos: AtalhoDock[]; ampliar: boolean; mostrarIniciar: boolean; mostrarBusca: boolean; fundo: string; opacidade: number; monitores: string; buscador: Buscador };
+  atalhosGlobais: Record<AcaoGlobal, string>;
   pomodoro: { foco: number; curta: number; longa: number; ciclos: number; autoProxima: boolean; tique: boolean };
   agua: { meta: number; copo: number };
   sons: { ligado: boolean; volume: number; categorias: Record<CategoriaSom, boolean> };
-  agentes: { nomes: Record<AgenteId, string>; cargos: Record<AgenteId, string>; inatividadeMin: number; favorito: AgenteId };
+  agentes: { nomes: Record<AgenteId, string>; cargos: Record<AgenteId, string>; aparencias: Record<AgenteId, AparenciaAgente>; acessorios: Record<AgenteId, AcessoriosAgente>; coresAcessorios: Record<AgenteId, string | null>; personas: Record<AgenteId, string>; inatividadeMin: number; favorito: AgenteId };
   consumo: { precoEntrada: number; precoSaida: number; limiteMensal: number; lerPlanos: boolean };
   ia: { provedorId: string | null; modelo: string; reservas: string[]; modelos: Record<string, string>; autoAprovar: CartaoConfirmacao["tipo"][] };
   privacidade: boolean;
   naoPerturbe: boolean;
+  avisosDesligados: CategoriaDeAviso[];
+  sugestaoAgendaGoogle: boolean;
   nuncaFinanceiro: boolean;
   pausarConexoes: boolean;
   conquistasAtivas: boolean;
@@ -162,7 +182,7 @@ export const CONFIG_PADRAO: Configuracoes = {
   ilha: {
     ativa: true,
     modo: "inteligente",
-    blocos: { hoje: true, midia: true, foco: true, chat: true, conexoes: true, avisos: true, claude: true },
+    blocos: { hoje: true, midia: true, foco: true, chat: true, conexoes: true, avisos: true, claude: true, time: true },
     ordemAbas: ABAS_ILHA,
     repouso: "agente",
     tamanho: "media",
@@ -173,8 +193,12 @@ export const CONFIG_PADRAO: Configuracoes = {
     esconderSeg: 4,
     notificacoes: "importantes",
     laterais: true,
+    iconesDaBarra: { rede: true, volume: true, bateria: true },
+    monitor: "",
   },
-  dock: { ativo: true, modo: "inteligente", favoritos: ["chat", "journal", "estudos", "financas", "calendario"], atalhos: [], ampliar: true, fundo: FUNDO_PADRAO_DAS_BORDAS, opacidade: 1, monitores: "todos" },
+  dock: { ativo: true, modo: "inteligente", favoritos: ["chat", "journal", "estudos", "financas", "calendario"], atalhos: [], ampliar: true, mostrarIniciar: true, mostrarBusca: true, fundo: FUNDO_PADRAO_DAS_BORDAS, opacidade: 1, monitores: "todos", buscador: "google" },
+  assistive: ASSISTIVE_PADRAO,
+  atalhosGlobais: ATALHOS_PADRAO,
   pomodoro: { foco: 25, curta: 5, longa: 15, ciclos: 4, autoProxima: false, tique: false },
   agua: { meta: 2000, copo: 250 },
   sons: {
@@ -185,6 +209,10 @@ export const CONFIG_PADRAO: Configuracoes = {
   agentes: {
     nomes: { organizador: "Rubi", tutor: "Nanquim", operador: "Sol", java: "Java" },
     cargos: { organizador: "Gerente de projetos", tutor: "Professor", operador: "Analista de operações", java: "Engenheiro de software" },
+    aparencias: { organizador: aparenciaPadrao("organizador"), tutor: aparenciaPadrao("tutor"), operador: aparenciaPadrao("operador"), java: aparenciaPadrao("java") },
+    acessorios: { organizador: { ...SEM_ACESSORIOS }, tutor: { ...SEM_ACESSORIOS }, operador: { ...SEM_ACESSORIOS }, java: { ...SEM_ACESSORIOS } },
+    coresAcessorios: { organizador: null, tutor: null, operador: null, java: null },
+    personas: { organizador: "", tutor: "", operador: "", java: "" },
     inatividadeMin: 10,
     favorito: "organizador",
   },
@@ -192,6 +220,8 @@ export const CONFIG_PADRAO: Configuracoes = {
   ia: { provedorId: null, modelo: "", reservas: [], modelos: {}, autoAprovar: [] },
   privacidade: false,
   naoPerturbe: false,
+  avisosDesligados: [],
+  sugestaoAgendaGoogle: true,
   nuncaFinanceiro: true,
   pausarConexoes: false,
   conquistasAtivas: true,
@@ -208,6 +238,7 @@ export const CONFIG_PADRAO: Configuracoes = {
 interface AcoesConfig {
   definir: (parcial: Partial<Configuracoes>) => void;
   definirIlha: (parcial: Partial<ConfigIlha>) => void;
+  definirAssistive: (parcial: Partial<ConfigAssistive>) => void;
   restaurar: () => void;
 }
 
@@ -215,8 +246,9 @@ export const useConfig = create<Configuracoes & AcoesConfig>()(
   persist(
     (set) => ({
       ...CONFIG_PADRAO,
-      definir: (parcial) => set(parcial),
-      definirIlha: (parcial) => set((s) => ({ ilha: { ...s.ilha, ...parcial } })),
+      definir: (parcial) => set((s) => ({ ...configuracoesValidas({ ...s, ...parcial }, CONFIG_PADRAO), assistive: validarAssistive(parcial.assistive ?? s.assistive) })),
+      definirIlha: (parcial) => set((s) => ({ ilha: configuracoesValidas({ ...s, ilha: { ...s.ilha, ...parcial } }, CONFIG_PADRAO).ilha })),
+      definirAssistive: (parcial) => set((s) => ({ assistive: validarAssistive({ ...s.assistive, ...parcial }) })),
       restaurar: () => set({ ...CONFIG_PADRAO, primeiraExecucaoFeita: true }),
     }),
     {
@@ -224,7 +256,12 @@ export const useConfig = create<Configuracoes & AcoesConfig>()(
       storage: armazenamento,
       version: 10,
       migrate: (salvo, versao) => {
-        const s = (salvo ?? {}) as Partial<Configuracoes>;
+        const s = (objeto(salvo) ? { ...salvo } : {}) as Partial<Configuracoes>;
+        if (s.ilha) s.ilha = {
+          ...configuracoesValidas({ ilha: s.ilha }, CONFIG_PADRAO).ilha,
+          blocos: (objeto(s.ilha.blocos) ? Object.fromEntries(Object.entries(s.ilha.blocos).filter(([, v]) => typeof v === "boolean")) : {}) as ConfigIlha["blocos"],
+          ordemAbas: Array.isArray(s.ilha.ordemAbas) ? s.ilha.ordemAbas.filter((a) => typeof a === "string") : [],
+        };
         if (versao < 2) {
           if (s.ilha && s.ilha.esconderSeg === 60) s.ilha = { ...s.ilha, esconderSeg: 4 };
           if (s.dock && s.dock.modo === "fixo") s.dock = { ...s.dock, modo: "inteligente" };
@@ -273,7 +310,7 @@ export const useConfig = create<Configuracoes & AcoesConfig>()(
         return s as Configuracoes & AcoesConfig;
       },
       merge: (persistido, atual) => {
-        const salvo = (persistido ?? {}) as Partial<Configuracoes>;
+        const salvo = configuracoesValidas(persistido, CONFIG_PADRAO);
         const barraSalva = Array.isArray(salvo.barraLateral) ? salvo.barraLateral.filter((i) => BARRA_PADRAO.some((p) => p.rota === i.rota)) : BARRA_PADRAO;
         const barraLateral = [...barraSalva];
         BARRA_PADRAO.forEach((item, i) => {
@@ -289,6 +326,7 @@ export const useConfig = create<Configuracoes & AcoesConfig>()(
           ilha: {
             ...CONFIG_PADRAO.ilha,
             ...salvo.ilha,
+            iconesDaBarra: { ...CONFIG_PADRAO.ilha.iconesDaBarra, ...salvo.ilha?.iconesDaBarra },
             blocos: Object.fromEntries(ABAS_ILHA.map((a) => [a, salvo.ilha?.blocos?.[a] ?? CONFIG_PADRAO.ilha.blocos[a]])) as Record<AbaIlha, boolean>,
             ordemAbas: [
               ...(salvo.ilha?.ordemAbas ?? []).filter((a) => ABAS_ILHA.includes(a)),
@@ -296,6 +334,8 @@ export const useConfig = create<Configuracoes & AcoesConfig>()(
             ],
           },
           dock: { ...CONFIG_PADRAO.dock, ...salvo.dock },
+          assistive: validarAssistive(salvo.assistive),
+          atalhosGlobais: atalhosComPadrao(salvo.atalhosGlobais),
           pomodoro: { ...CONFIG_PADRAO.pomodoro, ...salvo.pomodoro },
           agua: { ...CONFIG_PADRAO.agua, ...salvo.agua },
           sons: { ...CONFIG_PADRAO.sons, ...salvo.sons },
@@ -304,7 +344,7 @@ export const useConfig = create<Configuracoes & AcoesConfig>()(
             ...salvo.agentes,
             cargos: Object.fromEntries((Object.keys(CONFIG_PADRAO.agentes.cargos) as AgenteId[]).map((a) => {
               const cargo = salvo.agentes?.cargos?.[a];
-              return [a, cargo && cargo.trim() ? cargo : CONFIG_PADRAO.agentes.cargos[a]];
+              return [a, typeof cargo === "string" && cargo.trim() ? cargo : CONFIG_PADRAO.agentes.cargos[a]];
             })) as Record<AgenteId, string>,
             nomes: Object.fromEntries(
               (Object.keys(CONFIG_PADRAO.agentes.nomes) as AgenteId[]).map((a) => {

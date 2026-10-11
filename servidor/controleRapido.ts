@@ -394,6 +394,140 @@ function AbrirDaBandeja($caminho) {
   Start-Process -FilePath $real -WorkingDirectory ([IO.Path]::GetDirectoryName($real))
 }
 
+function CaminhoDaBandeja($caminho) {
+  $chave = ([string]$caminho).ToLowerInvariant()
+  if (-not $bandejaConhecida.ContainsKey($chave)) { Bandeja | Out-Null }
+  if (-not $bandejaConhecida.ContainsKey($chave)) { throw 'app_desconhecido' }
+  return $bandejaConhecida[$chave]
+}
+
+function MostrarNaPasta($caminho) {
+  $real = CaminhoDaBandeja $caminho
+  Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList ('/select,"' + $real + '"')
+}
+
+function EncerrarDaBandeja($caminho) {
+  $real = CaminhoDaBandeja $caminho
+  if ($real.StartsWith($env:WINDIR, [StringComparison]::OrdinalIgnoreCase)) { throw 'app_do_windows' }
+  $alvos = @((ProcessosPorCaminho)[$real.ToLowerInvariant()] | Where-Object { $_ })
+  foreach ($p in $alvos) { try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { } }
+  return $alvos.Count
+}
+
+$COMANDOS_DO_SISTEMA = @{
+  rede = 'ms-settings:network'
+  wifi = 'ms-settings:network-wifi'
+  bluetooth = 'ms-settings:bluetooth'
+  som = 'ms-settings:sound'
+  tela = 'ms-settings:display'
+  configuracoes = 'ms-settings:'
+  atualizacoes = 'ms-settings:windowsupdate'
+  tarefas = (Join-Path $env:WINDIR 'System32\Taskmgr.exe')
+  adaptadores = (Join-Path $env:WINDIR 'System32\ncpa.cpl')
+  terminal = (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe')
+  arquivos = (Join-Path $env:WINDIR 'explorer.exe')
+  painel = (Join-Path $env:WINDIR 'System32\control.exe')
+}
+$TEMPO_DO_CACHE_DE_APPS = 300
+$appsInstalados = @{}
+$listaDeApps = $null
+$appsLidosEm = [DateTime]::MinValue
+$iconesDeApps = @{}
+$LIMITE_DE_ICONES_GUARDADOS = 400
+
+function ExeDoApp($id) {
+  if ($id -like 'lnk:*') { return $null }
+  $c = [NikoControle]::ResolverCaminho([string]$id)
+  if ($c -match '(?i)^[a-z]:\\.+\.exe$' -and (Test-Path -LiteralPath $c -PathType Leaf)) { return $c }
+  return $null
+}
+
+function AppsDoMenuIniciar {
+  $itens = New-Object System.Collections.ArrayList
+  $vistos = @{}
+  try {
+    foreach ($a in @(Get-StartApps -ErrorAction Stop)) {
+      $nome = [string]$a.Name; $id = [string]$a.AppID
+      if (-not $nome -or -not $id -or $vistos.ContainsKey($id)) { continue }
+      $vistos[$id] = $true
+      [void]$itens.Add(@{ id = $id; nome = $nome; admin = [bool](ExeDoApp $id) })
+    }
+  } catch { }
+  if ($itens.Count -gt 0) { return $itens }
+  $pastas = @((Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'), (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'))
+  foreach ($pasta in $pastas) {
+    foreach ($f in @(Get-ChildItem -LiteralPath $pasta -Filter *.lnk -Recurse -ErrorAction SilentlyContinue)) {
+      $id = 'lnk:' + $f.FullName
+      if ($vistos.ContainsKey($id)) { continue }
+      $vistos[$id] = $true
+      [void]$itens.Add(@{ id = $id; nome = $f.BaseName; admin = $false })
+    }
+  }
+  return $itens
+}
+
+function ListarApps($forcar) {
+  if (-not $forcar -and $script:listaDeApps -and ((Get-Date) - $script:appsLidosEm).TotalSeconds -lt $TEMPO_DO_CACHE_DE_APPS) { return $script:listaDeApps }
+  $itens = @(AppsDoMenuIniciar | Where-Object { $_.nome -notmatch '(?i)^(uninstall|desinstalar)\b' } | Sort-Object { $_.nome })
+  $script:appsInstalados = @{}
+  foreach ($a in $itens) { $script:appsInstalados[$a.id] = $a }
+  $script:listaDeApps = @{ apps = $itens }
+  $script:appsLidosEm = Get-Date
+  return $script:listaDeApps
+}
+
+function AppConhecido($id) {
+  if (-not $script:appsInstalados.ContainsKey($id)) { ListarApps $true | Out-Null }
+  if (-not $script:appsInstalados.ContainsKey($id)) { throw 'app_desconhecido' }
+}
+
+function IconeDoAppInstalado($id) {
+  if (-not $script:appsInstalados.ContainsKey($id)) { return $null }
+  if ($iconesDeApps.ContainsKey($id)) { return $iconesDeApps[$id] }
+  if ($iconesDeApps.Count -ge $LIMITE_DE_ICONES_GUARDADOS) { $iconesDeApps.Clear() }
+  $valor = $null
+  try {
+    if ($id -like 'lnk:*') { $valor = [NikoControle]::IconeDoApp($id.Substring(4), 32) }
+    else { $valor = [NikoControle]::IconeDoApp('shell:AppsFolder\' + $id, 32) }
+  } catch { }
+  if (-not $valor) { $exe = ExeDoApp $id; if ($exe) { try { $valor = [NikoControle]::IconeDoApp($exe, 32) } catch { } } }
+  $iconesDeApps[$id] = $valor
+  return $valor
+}
+
+function DonoDaConexao($portaLocal, $portaRemota) {
+  $c = Get-NetTCPConnection -LocalPort ([int]$portaLocal) -RemotePort ([int]$portaRemota) -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 0 } | Select-Object -First 1
+  if ($c) { return [int]$c.OwningProcess }
+  return 0
+}
+
+function FocarJanelaDoProcesso($processoId) {
+  $atual = [int]$processoId
+  for ($nivel = 0; $nivel -lt 10 -and $atual -gt 4; $nivel++) {
+    $p = Get-Process -Id $atual -ErrorAction SilentlyContinue
+    if ($p -and $p.MainWindowHandle -ne [IntPtr]::Zero -and $p.ProcessName -notmatch '^(explorer|niko)$') {
+      [NikoControle]::Focar($p.MainWindowHandle) | Out-Null
+      return $p.ProcessName
+    }
+    $info = Get-CimInstance Win32_Process -Filter "ProcessId=$atual" -ErrorAction SilentlyContinue
+    if (-not $info) { break }
+    $atual = [int]$info.ParentProcessId
+  }
+  throw 'sem_janela'
+}
+
+function AbrirApp($id, $admin) {
+  AppConhecido $id
+  if ($id -like 'lnk:*') { Start-Process -FilePath $id.Substring(4); return }
+  if ($admin) {
+    $exe = ExeDoApp $id
+    if (-not $exe) { throw 'sem_admin' }
+    Start-Process -FilePath $exe -WorkingDirectory ([IO.Path]::GetDirectoryName($exe)) -Verb RunAs
+    return
+  }
+  Start-Process ('shell:AppsFolder\' + $id)
+}
+
 while ($true) {
   $linha = [Console]::In.ReadLine()
   if ($null -eq $linha) { break }
@@ -441,6 +575,23 @@ while ($true) {
       }
       'bandeja' { $r = Bandeja }
       'abrirDaBandeja' { AbrirDaBandeja $pedido.caminho; $r = @{ ok = $true } }
+      'pastaDaBandeja' { MostrarNaPasta $pedido.caminho; $r = @{ ok = $true } }
+      'encerrarDaBandeja' { $r = @{ ok = $true; encerrados = (EncerrarDaBandeja $pedido.caminho) } }
+      'apps' { $r = (ListarApps ($pedido.forcar -eq $true)).Clone() }
+      'iconesApps' {
+        $lista = @()
+        foreach ($id in @($pedido.ids)) { $lista += @{ id = [string]$id; icone = (IconeDoAppInstalado ([string]$id)) } }
+        $r = @{ icones = $lista }
+      }
+      'abrirApp' { AbrirApp ([string]$pedido.id) ($pedido.admin -eq $true); $r = @{ ok = $true } }
+      'donoDaConexao' { $r = @{ pid = (DonoDaConexao $pedido.portaLocal $pedido.portaRemota) } }
+      'focarProcesso' { $r = @{ ok = $true; janela = (FocarJanelaDoProcesso $pedido.pid) } }
+      'comandoDoSistema' {
+        $alvo = $COMANDOS_DO_SISTEMA[[string]$pedido.comando]
+        if (-not $alvo) { throw 'comando_desconhecido' }
+        Start-Process $alvo
+        $r = @{ ok = $true }
+      }
       default { throw 'acao_desconhecida' }
     }
     $r.id = $pedido.id
@@ -512,6 +663,47 @@ export const abrirDaBandeja = (d: Record<string, unknown>) => {
   if (NO_LINUX) return Promise.reject(new Error("app_desconhecido"));
   return pedir({ acao: "abrirDaBandeja", caminho: caminhoDeApp(d.caminho) });
 };
+export const pastaDaBandeja = (d: Record<string, unknown>) => pedir({ acao: "pastaDaBandeja", caminho: caminhoDeApp(d.caminho) });
+export const encerrarDaBandeja = (d: Record<string, unknown>) => {
+  if (d.confirmacao !== "CONFIRMADO") throw new Error("confirmacao_invalida");
+  return pedir({ acao: "encerrarDaBandeja", caminho: caminhoDeApp(d.caminho) });
+};
+
+export const COMANDOS_DO_SISTEMA = ["rede", "wifi", "bluetooth", "som", "tela", "configuracoes", "atualizacoes", "tarefas", "adaptadores", "terminal", "arquivos", "painel"] as const;
+const LIMITE_DE_ICONES = 12;
+
+export function idDeApp(valor: unknown): string {
+  if (typeof valor !== "string" || !valor || valor.length > 500 || /[\u0000-\u001f]/.test(valor)) throw new Error("valor_invalido");
+  return valor;
+}
+
+export const listarApps = (d: Record<string, unknown>) => pedir({ acao: "apps", forcar: d.forcar === true }, 40000);
+export const iconesDeApps = (d: Record<string, unknown>) => {
+  const ids = Array.isArray(d.ids) ? d.ids.slice(0, LIMITE_DE_ICONES).map(idDeApp) : [];
+  if (ids.length === 0) throw new Error("valor_invalido");
+  return pedir({ acao: "iconesApps", ids }, 30000);
+};
+export const abrirApp = (d: Record<string, unknown>) => pedir({ acao: "abrirApp", id: idDeApp(d.id), admin: d.admin === true }, 30000);
+export const abrirComandoDoSistema = (d: Record<string, unknown>) => {
+  if (!COMANDOS_DO_SISTEMA.includes(d.comando as (typeof COMANDOS_DO_SISTEMA)[number])) throw new Error("valor_invalido");
+  return pedir({ acao: "comandoDoSistema", comando: d.comando });
+};
+
+function porta(valor: unknown): number {
+  const n = Number(valor);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error("valor_invalido");
+  return n;
+}
+
+export async function donoDaConexao(portaLocal: number, portaRemota: number): Promise<number> {
+  const r = (await pedir({ acao: "donoDaConexao", portaLocal: porta(portaLocal), portaRemota: porta(portaRemota) }, 5000)) as { pid?: unknown };
+  return Number.isInteger(r.pid) && (r.pid as number) > 0 ? (r.pid as number) : 0;
+}
+
+export function focarJanelaDoProcesso(processoId: number) {
+  if (!Number.isInteger(processoId) || processoId <= 4) throw new Error("valor_invalido");
+  return pedir({ acao: "focarProcesso", pid: processoId }, 10000);
+}
 
 export function encerrarControle() {
   controle.encerrar();

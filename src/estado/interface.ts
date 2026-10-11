@@ -67,6 +67,26 @@ function geometriaSalva(): Geometria | null {
   }
 }
 
+const CHAVE_SISTEMA_ABERTO = "niko:sistema-aberto";
+
+function sistemaAbertoSalvo(): boolean {
+  if (NATIVO) return true;
+  try {
+    return localStorage.getItem(CHAVE_SISTEMA_ABERTO) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function salvarSistemaAberto(aberto: boolean) {
+  if (NATIVO) return;
+  try {
+    localStorage.setItem(CHAVE_SISTEMA_ABERTO, aberto ? "1" : "0");
+  } catch {
+    return;
+  }
+}
+
 const temporizadores = new Map<string, number>();
 
 export const useInterface = create<EstadoInterface>()((set, get) => ({
@@ -131,7 +151,7 @@ export const useInterface = create<EstadoInterface>()((set, get) => ({
   buscaAberta: false,
   capturaAberta: false,
   avisos: [],
-  sistemaAberto: true,
+  sistemaAberto: sistemaAbertoSalvo(),
   sistemaMinimizado: false,
   sistemaMaximizado: false,
   geometria: geometriaSalva() ?? { x: 0, y: 0, w: 0, h: 0 },
@@ -148,6 +168,7 @@ export const useInterface = create<EstadoInterface>()((set, get) => ({
     const parametros = rota === rotaPedida ? parametrosPedidos : {};
     const atual = get();
     const mesmoDestino = atual.rota === rota && JSON.stringify(parametros) === JSON.stringify(atual.parametros);
+    salvarSistemaAberto(true);
     set({
       rota,
       parametros: { ...parametros },
@@ -194,6 +215,7 @@ export const useInterface = create<EstadoInterface>()((set, get) => ({
       return;
     }
     set(parcial);
+    if (parcial.sistemaAberto !== undefined) salvarSistemaAberto(parcial.sistemaAberto);
     if (parcial.geometria) {
       try {
         localStorage.setItem("niko:janela-v2", JSON.stringify(parcial.geometria));

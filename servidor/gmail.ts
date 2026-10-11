@@ -3,7 +3,6 @@ import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import type { AddressInfo } from "node:net";
 
-const ESCOPOS = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.compose"];
 const BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
 
 export interface CredencialGmail {
@@ -32,7 +31,7 @@ export function lerCredencialGmail(texto: string): CredencialGmail {
   return c;
 }
 
-export async function autorizarGmail(clienteId: string, segredo: string): Promise<CredencialGmail> {
+export async function autorizarGoogle(clienteId: string, segredo: string, escopos: string[], servico: string): Promise<CredencialGmail> {
   if (!/\.apps\.googleusercontent\.com$/.test(clienteId)) throw new Error("cliente_id_invalido");
   const verificador = base64url(randomBytes(48));
   const desafio = base64url(createHash("sha256").update(verificador).digest());
@@ -49,7 +48,7 @@ export async function autorizarGmail(clienteId: string, segredo: string): Promis
       }
       const ok = Boolean(codigoRecebido);
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(`<!doctype html><meta charset="utf-8"><title>Niko</title><body style="font-family:system-ui;padding:40px;background:#0e0e10;color:#f1f2f4"><h2>${ok ? "Gmail conectado." : "Não deu certo."}</h2><p>${ok ? "Pode fechar esta aba e voltar ao Niko." : "Volte ao Niko e tente de novo."}</p></body>`);
+      res.end(`<!doctype html><meta charset="utf-8"><title>Niko</title><body style="font-family:system-ui;padding:40px;background:#0e0e10;color:#f1f2f4"><h2>${ok ? `${servico} conectado.` : "Não deu certo."}</h2><p>${ok ? "Pode fechar esta aba e voltar ao Niko." : "Volte ao Niko e tente de novo."}</p></body>`);
       clearTimeout(relogio);
       servidor.close();
       if (ok) resolver({ codigo: codigoRecebido!, redirecionamento: `http://127.0.0.1:${(servidor.address() as AddressInfo | null)?.port ?? porta}` });
@@ -66,7 +65,7 @@ export async function autorizarGmail(clienteId: string, segredo: string): Promis
         client_id: clienteId,
         redirect_uri: `http://127.0.0.1:${porta}`,
         response_type: "code",
-        scope: ESCOPOS.join(" "),
+        scope: escopos.join(" "),
         code_challenge: desafio,
         code_challenge_method: "S256",
         access_type: "offline",
@@ -90,7 +89,7 @@ export async function autorizarGmail(clienteId: string, segredo: string): Promis
   });
   const json = (await r.json()) as { refresh_token?: string; access_token?: string; expires_in?: number; error?: string; error_description?: string };
   if (!r.ok || !json.refresh_token) throw new Error(json.error_description ?? json.error ?? `http_${r.status}`);
-  if (json.access_token) acessos.set(clienteId, { token: json.access_token, expira: Date.now() + (json.expires_in ?? 3000) * 1000 - 60000 });
+  if (json.access_token) acessos.set(json.refresh_token, { token: json.access_token, expira: Date.now() + (json.expires_in ?? 3000) * 1000 - 60000 });
   return { clienteId, segredo, refresh: json.refresh_token };
 }
 
@@ -98,12 +97,13 @@ const acessos = new Map<string, { token: string; expira: number }>();
 const renovacoesEmAndamento = new Map<string, Promise<string>>();
 
 function tokenDeAcesso(c: CredencialGmail): Promise<string> {
-  const guardado = acessos.get(c.clienteId);
+  const chaveDoAcesso = c.refresh ?? c.clienteId;
+  const guardado = acessos.get(chaveDoAcesso);
   if (guardado && guardado.expira > Date.now()) return Promise.resolve(guardado.token);
-  const emAndamento = renovacoesEmAndamento.get(c.clienteId);
+  const emAndamento = renovacoesEmAndamento.get(chaveDoAcesso);
   if (emAndamento) return emAndamento;
-  const renovacao = renovarToken(c).finally(() => renovacoesEmAndamento.delete(c.clienteId));
-  renovacoesEmAndamento.set(c.clienteId, renovacao);
+  const renovacao = renovarToken(c).finally(() => renovacoesEmAndamento.delete(chaveDoAcesso));
+  renovacoesEmAndamento.set(chaveDoAcesso, renovacao);
   return renovacao;
 }
 
@@ -117,13 +117,13 @@ async function renovarToken(c: CredencialGmail): Promise<string> {
   });
   const json = (await r.json()) as { access_token?: string; expires_in?: number; error?: string };
   if (!r.ok || !json.access_token) throw new Error(json.error === "invalid_grant" ? "autorizacao_expirada" : json.error ?? `http_${r.status}`);
-  acessos.set(c.clienteId, { token: json.access_token, expira: Date.now() + (json.expires_in ?? 3000) * 1000 - 60000 });
+  acessos.set(c.refresh, { token: json.access_token, expira: Date.now() + (json.expires_in ?? 3000) * 1000 - 60000 });
   return json.access_token;
 }
 
-async function api<T>(c: CredencialGmail, caminho: string, corpo?: unknown): Promise<T> {
+export async function apiGoogle<T>(c: CredencialGmail, caminho: string, corpo?: unknown, base = BASE): Promise<T> {
   const token = await tokenDeAcesso(c);
-  const r = await fetch(`${BASE}${caminho}`, {
+  const r = await fetch(`${base}${caminho}`, {
     method: corpo === undefined ? "GET" : "POST",
     headers: { authorization: `Bearer ${token}`, ...(corpo === undefined ? {} : { "content-type": "application/json" }) },
     body: corpo === undefined ? undefined : JSON.stringify(corpo),
@@ -149,10 +149,10 @@ export interface EmailResumo {
 }
 
 async function listar(c: CredencialGmail, q: string, maximo: number): Promise<EmailResumo[]> {
-  const lista = await api<{ messages?: { id: string }[] }>(c, `/messages?maxResults=${maximo}&q=${encodeURIComponent(q)}`);
+  const lista = await apiGoogle<{ messages?: { id: string }[] }>(c, `/messages?maxResults=${maximo}&q=${encodeURIComponent(q)}`);
   const itens = await Promise.all(
     (lista.messages ?? []).map((m) =>
-      api<{ id: string; snippet: string; labelIds?: string[]; internalDate: string; payload?: { headers?: Cabecalho[] } }>(c, `/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`).catch(() => null),
+      apiGoogle<{ id: string; snippet: string; labelIds?: string[]; internalDate: string; payload?: { headers?: Cabecalho[] } }>(c, `/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`).catch(() => null),
     ),
   );
   return itens
@@ -174,8 +174,8 @@ async function listar(c: CredencialGmail, q: string, maximo: number): Promise<Em
 export async function lerGmail(texto: string) {
   const c = lerCredencialGmail(texto);
   const [perfil, caixa, importantes, recentes] = await Promise.all([
-    api<{ emailAddress: string; messagesTotal: number }>(c, "/profile"),
-    api<{ messagesUnread?: number; messagesTotal?: number }>(c, "/labels/INBOX"),
+    apiGoogle<{ emailAddress: string; messagesTotal: number }>(c, "/profile"),
+    apiGoogle<{ messagesUnread?: number; messagesTotal?: number }>(c, "/labels/INBOX"),
     listar(c, "in:inbox is:important is:unread", 10),
     listar(c, "in:inbox", 15),
   ]);
@@ -199,13 +199,13 @@ function montarMensagem(para: string, assunto: string, corpo: string): string {
 export async function criarRascunhoGmail(texto: string, dados: { para?: unknown; assunto?: unknown; corpo?: unknown }) {
   const c = lerCredencialGmail(texto);
   const raw = montarMensagem(String(dados.para ?? ""), String(dados.assunto ?? ""), String(dados.corpo ?? ""));
-  const r = await api<{ id: string }>(c, "/drafts", { message: { raw } });
+  const r = await apiGoogle<{ id: string }>(c, "/drafts", { message: { raw } });
   return { ok: true, id: r.id };
 }
 
 export async function enviarGmail(texto: string, dados: { para?: unknown; assunto?: unknown; corpo?: unknown }) {
   const c = lerCredencialGmail(texto);
   const raw = montarMensagem(String(dados.para ?? ""), String(dados.assunto ?? ""), String(dados.corpo ?? ""));
-  const r = await api<{ id: string }>(c, "/messages/send", { raw });
+  const r = await apiGoogle<{ id: string }>(c, "/messages/send", { raw });
   return { ok: true, id: r.id };
 }

@@ -2,6 +2,7 @@ import { FUNDO_PADRAO_DAS_BORDAS, useConfig } from "../../estado/configuracoes";
 import { DESTAQUE_PADRAO } from "../../janelas/area-de-trabalho/usarTema";
 import { FUNDO_DESTAQUE, hexValido, misturar } from "../../utilitarios/cores";
 import { T } from "../../textos/textos";
+import { FaixaAjuste, LinhaAjuste } from "./LinhaAjuste";
 
 export const FUNDOS_PRONTOS = [
   { valor: FUNDO_PADRAO_DAS_BORDAS, rotulo: T.configuracoes.fundosProntos.grafite },
@@ -26,12 +27,11 @@ export function SeletorDeFundo({ id, fundo, opacidade, aoMudar }: PropsSeletorDe
 
   return (
     <>
-      <div className="campo-grupo">
-        <span className="campo-rotulo">{T.configuracoes.corDeFundo}</span>
-        <div className="pilulas">
+      <LinhaAjuste rotulo={T.configuracoes.corDeFundo} dica={T.configuracoes.textoAutomatico}>
+        <div className="pilulas" role="group" aria-label={T.configuracoes.corDeFundo}>
           {FUNDOS_PRONTOS.map((f) => (
             <button key={f.valor} type="button" className="pilula" aria-pressed={fundo === f.valor} onClick={() => aoMudar({ fundo: f.valor })}>
-              <span className="ponto-cor" style={{ background: amostra(f.valor), border: "1px solid var(--borda-forte)" }} />
+              <span className="ajuste-ponto-cor" style={{ background: amostra(f.valor) }} />
               {f.rotulo}
             </button>
           ))}
@@ -39,8 +39,7 @@ export function SeletorDeFundo({ id, fundo, opacidade, aoMudar }: PropsSeletorDe
             <input
               id={`${id}-cor`}
               type="color"
-              className="seletor-cor"
-              style={{ width: 18, height: 18 }}
+              className="ajuste-cor-mini"
               value={hexValido(fundo) ? fundo : amostra(fundo)}
               aria-label={T.configuracoes.outraCor}
               onChange={(e) => aoMudar({ fundo: e.target.value })}
@@ -48,24 +47,19 @@ export function SeletorDeFundo({ id, fundo, opacidade, aoMudar }: PropsSeletorDe
             {T.configuracoes.outraCor}
           </label>
         </div>
-        <span className="campo-dica">{T.configuracoes.textoAutomatico}</span>
-      </div>
-      <div className="campo-grupo">
-        <label className="campo-rotulo" htmlFor={`${id}-opacidade`}>{T.configuracoes.opacidade}</label>
-        <div className="linha">
-          <input
-            id={`${id}-opacidade`}
-            type="range"
-            min={30}
-            max={100}
-            step={5}
-            value={percentual}
-            style={{ flex: 1 }}
-            onChange={(e) => aoMudar({ opacidade: Number(e.target.value) / 100 })}
-          />
-          <span className="numero" style={{ width: 44, textAlign: "right" }}>{T.configuracoes.opacidadeValor(percentual)}</span>
-        </div>
-      </div>
+      </LinhaAjuste>
+      <LinhaAjuste rotulo={T.configuracoes.opacidade} para={`${id}-opacidade`} esticar>
+        <FaixaAjuste
+          id={`${id}-opacidade`}
+          rotulo={T.configuracoes.opacidade}
+          valor={percentual}
+          min={30}
+          max={100}
+          passo={5}
+          texto={T.configuracoes.opacidadeValor(percentual)}
+          aoMudar={(v) => aoMudar({ opacidade: v / 100 })}
+        />
+      </LinhaAjuste>
     </>
   );
 }

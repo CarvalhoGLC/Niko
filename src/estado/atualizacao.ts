@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { NATIVO } from "../desktop/desktop";
+import { NATIVO, prepararAtualizacao } from "../desktop/desktop";
+import { salvarAgora } from "../ponte/armazenamento";
 import { tocarSom } from "../ponte/sons";
 import { T } from "../textos/textos";
 import { versaoMaisNova } from "../utilitarios/versoes";
@@ -83,8 +84,9 @@ export const useAtualizacao = create<EstadoAtualizacao>()((set, get) => ({
     set({ fase: "baixando", progresso: 0, erro: "" });
     let total = 0;
     let baixado = 0;
+    let ponteParada = false;
     try {
-      await pendente.downloadAndInstall((e) => {
+      await pendente.download((e) => {
         if (e.event === "Started") total = e.data?.contentLength ?? 0;
         if (e.event === "Progress") {
           baixado += e.data?.chunkLength ?? 0;
@@ -92,10 +94,20 @@ export const useAtualizacao = create<EstadoAtualizacao>()((set, get) => ({
         }
         if (e.event === "Finished") set({ fase: "instalando", progresso: 1 });
       });
+      set({ fase: "instalando", progresso: 1 });
       void tocarSom("approve", "avisos");
+      await salvarAgora();
+      await prepararAtualizacao();
+      ponteParada = true;
+      await pendente.install();
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch {
+      if (ponteParada) {
+        const { relaunch } = await import("@tauri-apps/plugin-process");
+        await relaunch().catch(() => undefined);
+        return;
+      }
       set({ fase: "erro", erro: T.atualizacao.erroInstalacao });
       void tocarSom("error", "avisos");
     }

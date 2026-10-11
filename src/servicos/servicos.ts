@@ -1,8 +1,8 @@
 import { useEffect } from "react";
-import { useConfig } from "../estado/configuracoes";
+import { useConfig, type CategoriaDeAviso } from "../estado/configuracoes";
 import { usePomodoro } from "../estado/pomodoro";
 import { useAgentes } from "../estado/agentes";
-import { useIlha } from "../estado/ilha";
+import { avisoLigado, useIlha } from "../estado/ilha";
 import { useMidia } from "../estado/midia";
 import { useInterface } from "../estado/interface";
 import { limparExemplos, limparSimulacoes } from "../dados/limparExemplos";
@@ -12,8 +12,9 @@ import { useComunicacao, SERVICOS } from "../estado/comunicacao";
 import { useRotina, habitoCumprido } from "../estado/rotina";
 import { useEstudos } from "../estado/estudos";
 import { useConquistas, CONQUISTAS } from "../estado/conquistas";
-import { definirPreferenciasSom, tocarSom } from "../ponte/sons";
-import { definirViradaDoDia, hojeISO, paraISO, descreverDistancia } from "../utilitarios/datas";
+import { tocarSom } from "../ponte/sons";
+import { usarPreferenciasDaJanela } from "./usarPreferenciasDaJanela";
+import { hojeISO, paraISO, descreverDistancia } from "../utilitarios/datas";
 import { minutosEstudoPorDia, sequenciaDias, sequenciaHabito } from "../utilitarios/estatisticas";
 import { conexoesPonte, resumoDe, ocorrenciasDe, type DadosGithub } from "../ponte/conexoesReais";
 import { guardarCommits } from "../utilitarios/estatisticas";
@@ -21,11 +22,13 @@ import { marcarSeNovo } from "../ponte/armazenamento";
 import { lerConsumo } from "../ponte/ponteLocal";
 import { rotuloJanela } from "../utilitarios/consumo";
 import { T } from "../textos/textos";
-import type { Evento, ServicoId } from "../tipos";
+import { conexaoEmTestes } from "../utilitarios/disponibilidadeConexoes";
+import type { Evento, Habito, ServicoId } from "../tipos";
 import { addDays, addMonths, addWeeks } from "date-fns";
 import { conquistaLigada, funcaoLigada } from "../utilitarios/funcoes";
 
-function notificar(titulo: string, corpo: string) {
+function notificar(titulo: string, corpo: string, categoria?: CategoriaDeAviso) {
+  if (useConfig.getState().naoPerturbe || !avisoLigado(categoria)) return;
   try {
     if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) new Notification(titulo, { body: corpo });
   } catch {
@@ -33,17 +36,24 @@ function notificar(titulo: string, corpo: string) {
   }
 }
 
-function eventoDisparaEm(e: Evento, agora: Date): string | null {
+export function eventoDisparaEm(e: Evento, agora: Date): string | null {
   if (e.tipo !== "lembrete" || !e.hora) return null;
   let data = new Date(`${e.data}T${e.hora}:00`);
   if (e.repeticao !== "nenhuma") {
+    const proxima = (d: Date) => (e.repeticao === "diaria" ? addDays(d, 1) : e.repeticao === "semanal" ? addWeeks(d, 1) : addMonths(d, 1));
     let protecao = 0;
     while (data < new Date(agora.getTime() - 86400000) && protecao < 2000) {
-      data = e.repeticao === "diaria" ? addDays(data, 1) : e.repeticao === "semanal" ? addWeeks(data, 1) : addMonths(data, 1);
+      data = proxima(data);
+      protecao++;
+    }
+    const pular = new Set(e.excecoes ?? []);
+    while (pular.has(paraISO(data)) && data <= agora && protecao < 2100) {
+      data = proxima(data);
       protecao++;
     }
   }
   if (data > agora) return null;
+  if ((e.feitos ?? []).includes(paraISO(data))) return null;
   if (agora.getTime() - data.getTime() > 6 * 3600000) return null;
   const chave = data.toISOString();
   if (e.ultimoDisparo && e.ultimoDisparo >= chave) return null;
@@ -76,7 +86,7 @@ function verificarLembretes() {
     org.atualizarEvento(e.id, { ultimoDisparo: disparo });
     const texto = T.calendario.lembreteDisparado(e.titulo);
     useAgentes.getState().alertar("organizador", texto, "calendario", "wink", undefined, true);
-    notificar(T.app.nome, texto);
+    notificar(T.app.nome, texto, "lembretes");
   }
 }
 
@@ -91,7 +101,7 @@ function verificarDatas() {
     if (nivel === undefined || !marcarSeNovo(`data-${d.id}-${nivel}`)) continue;
     const texto = T.falas.tutor.prova(`${T.estudos.tiposData[d.tipo]}: ${d.titulo}`, descreverDistancia(d.data));
     useAgentes.getState().alertar("tutor", texto, "estudos", "question");
-    notificar(T.app.nome, texto);
+    notificar(T.app.nome, texto, "estudos");
   }
 }
 
@@ -171,9 +181,31 @@ function verificarConquistas() {
     const def = CONQUISTAS.find((c) => c.codigo === a.codigo);
     if (!def) continue;
     const nome = T.conquistas.itens[a.codigo]?.nome ?? a.codigo;
-    void tocarSom("proud", "personagens");
-    useIlha.getState().revelar({ texto: T.conquistas.comemoracao(nome), tipo: "sucesso", agente: def.agente }, 4200);
+    if (avisoLigado("conquistas")) void tocarSom("proud", "personagens");
+    useIlha.getState().revelar({ texto: T.conquistas.comemoracao(nome), tipo: "sucesso", agente: def.agente, categoria: "conquistas" }, 4200);
     useAgentes.getState().registrar(def.agente, T.conquistas.comemoracao(nome));
+  }
+}
+
+export function habitosNaHora(habitos: Habito[], registrosDeHoje: Record<string, number> | undefined, agora: Date): Habito[] {
+  const minutos = agora.getHours() * 60 + agora.getMinutes();
+  return habitos.filter((h) => {
+    if (h.arquivado || !h.hora || habitoCumprido(h, registrosDeHoje?.[h.id])) return false;
+    const [hh, mm] = h.hora.split(":").map(Number);
+    const atraso = minutos - (hh * 60 + mm);
+    return atraso >= 0 && atraso <= 6 * 60;
+  });
+}
+
+function avisarHabitosNaHora() {
+  if (!funcaoLigada("journal")) return;
+  const hoje = hojeISO();
+  const rotina = useRotina.getState();
+  for (const h of habitosNaHora(rotina.habitos, rotina.registros[hoje], new Date())) {
+    if (!marcarSeNovo(`habito-hora-${h.id}-${hoje}`)) continue;
+    const texto = T.journal.habitoNaHora(h.nome);
+    useAgentes.getState().alertar("organizador", texto, "journal", "wink", undefined, true);
+    notificar(T.app.nome, texto, "habitos");
   }
 }
 
@@ -204,17 +236,25 @@ async function acertarConexoes() {
 }
 
 const proximaLeitura = new Map<ServicoId, number>();
+const LEITURA_COM_CI_RODANDO_MS = 60_000;
 const emLeitura = new Set<ServicoId>();
 const vistas = new Map<ServicoId, Set<string>>();
 
 export async function atualizarConexaoAgora(id: ServicoId, forcar = true) {
+  if (conexaoEmTestes(id)) return;
   if (emLeitura.has(id)) return;
   emLeitura.add(id);
   const com = useComunicacao.getState();
   try {
     const dados = await conexoesPonte.ler(id, forcar);
     com.atualizarConexao(id, { ultimaAtualizacao: new Date().toISOString(), resumo: resumoDe(id, dados), status: "conectado" });
-    if (id === "github") guardarCommits((dados as DadosGithub).commitsPorDia ?? {});
+    if (id === "github") {
+      const g = dados as DadosGithub;
+      guardarCommits(g.commitsPorDia ?? {});
+      if (g.actions.some((a) => a.status === "rodando") || g.prs.some((p) => p.ci === "rodando")) {
+        proximaLeitura.set(id, Math.min(proximaLeitura.get(id) ?? Infinity, Date.now() + LEITURA_COM_CI_RODANDO_MS));
+      }
+    }
     const ocorrencias = ocorrenciasDe(id, dados);
     const conhecidas = vistas.get(id);
     if (!conhecidas) {
@@ -253,18 +293,14 @@ function lerConexoes() {
   }
 }
 export function useServicos() {
-  const sons = useConfig((s) => s.sons);
-  const virada = useConfig((s) => s.viradaAs4h);
+  useEffect(() => {
+    const falhou = () => useInterface.getState().avisar(T.configuracoes.salvarFalhou);
+    window.addEventListener("niko:armazenamento-falhou", falhou);
+    return () => window.removeEventListener("niko:armazenamento-falhou", falhou);
+  }, []);
   const inatividade = useConfig((s) => s.agentes.inatividadeMin);
-  const naoPerturbe = useConfig((s) => s.naoPerturbe);
 
-  useEffect(() => {
-    definirPreferenciasSom({ ...sons, silencioFoco: naoPerturbe });
-  }, [sons, naoPerturbe]);
-
-  useEffect(() => {
-    definirViradaDoDia(virada);
-  }, [virada]);
+  usarPreferenciasDaJanela();
 
   useEffect(() => {
     const limpouExemplos = limparExemplos();
@@ -274,6 +310,9 @@ export function useServicos() {
     useRotina.getState().marcarAbertura();
     useFinancas.getState().garantirCategorias();
     useOrganizacao.getState().garantirPilares();
+    const estudos = useEstudos.getState();
+    const paginasExistentes = new Set(estudos.paginas.map((p) => p.id));
+    if (estudos.revisoesConteudo.some((r) => !paginasExistentes.has(r.paginaId))) useEstudos.setState({ revisoesConteudo: estudos.revisoesConteudo.filter((r) => paginasExistentes.has(r.paginaId)) });
     const gerados = useFinancas.getState().gerarRecorrentes();
     if (gerados > 0 && funcaoLigada("financas")) useAgentes.getState().registrar("operador", T.financas.abas.recorrentes);
     verificarPomodoro();
@@ -298,6 +337,7 @@ export function useServicos() {
       }, 1000);
       lento = window.setInterval(() => {
         verificarLembretes();
+        avisarHabitosNaHora();
         verificarOrcamento();
         verificarConquistas();
         lembrarHabitos();
@@ -307,6 +347,7 @@ export function useServicos() {
         useFinancas.getState().gerarRecorrentes();
       }, 20000);
       verificarLembretes();
+      avisarHabitosNaHora();
       verificarOrcamento();
     };
     const parar = () => {

@@ -10,30 +10,30 @@ use serde::Deserialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::ShortcutState;
 
+mod atalhos;
 #[cfg(windows)]
 mod barra_windows;
-mod docks;
 #[cfg(not(windows))]
 #[path = "barra_linux.rs"]
 mod barra_windows;
-
+mod docks;
 #[cfg(windows)]
 mod janela_frente;
 #[cfg(not(windows))]
 #[path = "janela_frente_linux.rs"]
 mod janela_frente;
-
 #[cfg(windows)]
 mod miniaturas;
 #[cfg(not(windows))]
 #[path = "miniaturas_linux.rs"]
 mod miniaturas;
+mod salvamento;
 
 const PORTA: u16 = 47831;
 const ALTURA_ILHA: f64 = 720.0;
-const ALTURA_DOCK: f64 = 250.0;
+const ALTURA_DOCK: f64 = 400.0;
 
 #[derive(Deserialize, Clone, Copy)]
 struct Retangulo {
@@ -84,8 +84,26 @@ const LIMITE_DA_ABERTURA: Duration = Duration::from_secs(9);
 
 fn liberar_abertura(app: &AppHandle) {
     if ABERTURA_PENDENTE.swap(false, Ordering::Relaxed) {
-        mostrar(app);
+        mostrar_inicial(app);
     }
+}
+
+#[cfg(target_os = "macos")]
+fn mostrar_inicial(app: &AppHandle) {
+    if let Some(janela) = app.get_webview_window("sistema") {
+        let _ = janela.unminimize();
+        // No macOS, centralizar/maximizar durante a criação não é confiável
+        // enquanto a janela ainda está oculta. Aplique ao revelá-la.
+        let _ = janela.center();
+        let _ = janela.show();
+        let _ = janela.maximize();
+        let _ = janela.set_focus();
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mostrar_inicial(app: &AppHandle) {
+    mostrar(app);
 }
 
 #[tauri::command]
@@ -93,24 +111,33 @@ fn liberar_sistema_inicial(app: AppHandle) {
     liberar_abertura(&app);
 }
 
+#[cfg(not(windows))]
 #[tauri::command]
 fn tempo_ocioso_ms() -> u64 {
-    #[cfg(windows)]
-    {
-        use windows::Win32::System::SystemInformation::GetTickCount;
- 
-        use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
-        let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
-        if !unsafe { GetLastInputInfo(&mut info) }.as_bool() {
-            return 0;
-        }
-        u64::from(unsafe { GetTickCount() }.wrapping_sub(info.dwTime))
-    }
-    #[cfg(not(windows))]
-    {
-        0
-    }
+    // GNOME: o monitor de inatividade do Mutter responde em milissegundos, por exemplo "(uint64 4231,)".
+    let saida = Command::new("gdbus")
+        .args(["call", "--session", "--dest", "org.gnome.Mutter.IdleMonitor", "--object-path", "/org/gnome/Mutter/IdleMonitor/Core", "--method", "org.gnome.Mutter.IdleMonitor.GetIdletime"])
+        .output();
+    let Ok(saida) = saida else { return 0 };
+    let texto = String::from_utf8_lossy(&saida.stdout).to_string();
+    let digitos: String = texto.split_whitespace().nth(1).unwrap_or("").chars().take_while(|c| c.is_ascii_digit()).collect();
+    digitos.parse::<u64>().unwrap_or(0)
 }
+
+#[cfg(windows)]
+#[tauri::command]
+fn tempo_ocioso_ms() -> u64 {
+    use windows::Win32::System::SystemInformation::GetTickCount;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    if !unsafe { GetLastInputInfo(&mut info) }.as_bool() {
+        return 0;
+    }
+    u64::from(unsafe { GetTickCount() }.wrapping_sub(info.dwTime))
+}
+
+#[cfg(not(windows))]
+fn registrar_frente(_app: &AppHandle) {}
 
 #[cfg(windows)]
 fn registrar_frente(app: &AppHandle) {
@@ -118,14 +145,27 @@ fn registrar_frente(app: &AppHandle) {
     if frente == 0 {
         return;
     }
-    let sobreposta = app.webview_windows().iter().any(|(r, j)| (r == "ilha" || docks::eh_dock(r)) && j.hwnd().map(|h| h.0 as isize == frente).unwrap_or(false));
+    let sobreposta = app.webview_windows().iter().any(|(r, j)| (r == "ilha" || r == "assistive" || docks::eh_dock(r)) && j.hwnd().map(|h| h.0 as isize == frente).unwrap_or(false));
     if !sobreposta {
         ULTIMA_FRENTE.store(frente, Ordering::Relaxed);
     }
 }
 
 #[cfg(not(windows))]
-fn registrar_frente(_app: &AppHandle) {}
+#[tauri::command]
+fn devolver_foco() {}
+
+#[cfg(windows)]
+#[tauri::command]
+fn devolver_foco() {
+    let anterior = ULTIMA_FRENTE.load(Ordering::Relaxed);
+    if anterior != 0 {
+        let janela = windows::Win32::Foundation::HWND(anterior as *mut core::ffi::c_void);
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(janela);
+        }
+    }
+}
 
 #[tauri::command]
 fn alternar_sistema(app: AppHandle) {
@@ -148,11 +188,19 @@ fn abrir_no_sistema(endereco: &str) -> Result<(), String> {
     let largo: Vec<u16> = endereco.encode_utf16().chain(std::iter::once(0)).collect();
     let resultado = unsafe {
         windows::Win32::UI::Shell::ShellExecuteW(
-            None, windows::core::w!("open"), windows::core::PCWSTR(largo.as_ptr()),
-            None, None, windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+            None,
+            windows::core::w!("open"),
+            windows::core::PCWSTR(largo.as_ptr()),
+            None,
+            None,
+            windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
         )
     };
-    if resultado.0 as isize > 32 { Ok(()) } else { Err("falha_ao_abrir".into()) }
+    if resultado.0 as isize > 32 {
+        Ok(())
+    } else {
+        Err("falha_ao_abrir".into())
+    }
 }
 
 #[cfg(not(windows))]
@@ -164,7 +212,9 @@ fn abrir_no_sistema(endereco: &str) -> Result<(), String> {
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|_| "falha_ao_abrir".to_string())?;
-    std::thread::spawn(move || { let _ = filho.wait(); });
+    std::thread::spawn(move || {
+        let _ = filho.wait();
+    });
     Ok(())
 }
 
@@ -182,17 +232,19 @@ fn sair(app: AppHandle) {
     sair_salvando(&app);
 }
 
-const ESPERA_PARA_SALVAR: Duration = Duration::from_millis(700);
-
 fn sair_salvando(app: &AppHandle) {
-    if ENCERRANDO.swap(true, Ordering::Relaxed) {
+    if ENCERRAMENTO_PEDIDO.swap(true, Ordering::Relaxed) {
         return;
     }
-    let _ = app.emit("niko://saindo", ());
     let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(ESPERA_PARA_SALVAR);
-        app.exit(0);
+    tauri::async_runtime::spawn(async move {
+        if salvamento::salvar(&app).await.is_ok() {
+            ENCERRANDO.store(true, Ordering::Relaxed);
+            app.exit(0);
+        } else {
+            ENCERRAMENTO_PEDIDO.store(false, Ordering::Relaxed);
+            mostrar(&app);
+        }
     });
 }
 
@@ -203,6 +255,25 @@ fn mostrar(app: &AppHandle) {
         let _ = janela.show();
         let _ = janela.set_focus();
     }
+}
+
+fn dock_sob_o_cursor(app: &AppHandle) -> Option<WebviewWindow> {
+    let docks: Vec<(String, WebviewWindow)> = app.webview_windows().into_iter().filter(|(r, j)| docks::eh_dock(r) && j.is_visible().unwrap_or(false)).collect();
+    let cursor = app.cursor_position().ok();
+    let sob_o_cursor = cursor.and_then(|c| {
+        docks.iter().find(|(_, j)| {
+            let Ok(Some(m)) = j.current_monitor() else { return false };
+            let (p, t) = (m.position(), m.size());
+            c.x >= p.x as f64 && c.x < p.x as f64 + t.width as f64 && c.y >= p.y as f64 && c.y < p.y as f64 + t.height as f64
+        })
+    });
+    sob_o_cursor.or_else(|| docks.iter().find(|(r, _)| r == "dock")).or(docks.first()).map(|(_, j)| j.clone())
+}
+
+fn abrir_lupa(app: &AppHandle) {
+    let Some(dock) = dock_sob_o_cursor(app) else { return };
+    let _ = dock.set_focus();
+    let _ = dock.emit_to(dock.label(), "niko://lupa", ());
 }
 
 fn criar_sobreposta(app: &AppHandle, rotulo: &str, y: f64, x: f64, largura: f64, altura: f64) -> tauri::Result<WebviewWindow> {
@@ -221,6 +292,7 @@ fn criar_sobreposta(app: &AppHandle, rotulo: &str, y: f64, x: f64, largura: f64,
         .build()
 }
 
+// No Linux, uma janela escondida ainda não existe de verdade e o tao falha ao pedir click-through nela.
 fn ignorar_cursor(janela: &WebviewWindow, ignorar: bool) -> bool {
     #[cfg(target_os = "linux")]
     {
@@ -228,42 +300,54 @@ fn ignorar_cursor(janela: &WebviewWindow, ignorar: bool) -> bool {
             return false;
         }
     }
-    let _ = janela.set_ignore_cursor_events(ignorar);
-    true
+    janela.set_ignore_cursor_events(ignorar).is_ok()
 }
 
 fn vigiar_cursor(app: AppHandle) {
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn(async move {
         let mut fora: HashMap<String, bool> = HashMap::new();
         loop {
-            std::thread::sleep(Duration::from_millis(45));
-            registrar_frente(&app);
-            let areas = match app.state::<Estado>().areas.lock() {
-                Ok(a) => a.clone(),
-                Err(_) => continue,
-            };
-            let sobrepostas: Vec<(String, WebviewWindow)> = app.webview_windows().into_iter().filter(|(r, _)| r == "ilha" || docks::eh_dock(r)).collect();
-            fora.retain(|r, _| sobrepostas.iter().any(|(s, _)| s == r));
-            for (rotulo, janela) in &sobrepostas {
-                let rotulo = rotulo.as_str();
-                let (Ok(cursor), Ok(origem), Ok(escala)) = (janela.cursor_position(), janela.outer_position(), janela.scale_factor()) else { continue };
-                let x = (cursor.x - origem.x as f64) / escala;
-                let y = (cursor.y - origem.y as f64) / escala;
-                let dentro = areas.get(rotulo).map(|lista| lista.iter().any(|r| x >= r.x - 4.0 && x <= r.x + r.w + 4.0 && y >= r.y - 4.0 && y <= r.y + r.h + 4.0)).unwrap_or(false);
-                let estava_fora = *fora.get(rotulo).unwrap_or(&false);
-                let agora_fora = !dentro;
-                if !fora.contains_key(rotulo) || estava_fora != agora_fora {
-                    if !ignorar_cursor(&janela, agora_fora){
-                        continue;
-                    }
-                    if agora_fora {
-                        let _ = janela.emit_to(rotulo, "niko://cursor-fora", ());
-                    }
-                    fora.insert(rotulo.to_string(), agora_fora);
-                }
+            tokio::time::sleep(Duration::from_millis(45)).await;
+            if ENCERRANDO.load(Ordering::Relaxed) { return; }
+            let alvo = app.clone();
+            match tauri::async_runtime::spawn_blocking(move || atualizar_cursor(&alvo, fora)).await {
+                Ok(atual) => fora = atual,
+                Err(_) => return,
             }
         }
     });
+}
+
+fn atualizar_cursor(app: &AppHandle, mut fora: HashMap<String, bool>) -> HashMap<String, bool> {
+    if ENCERRANDO.load(Ordering::Relaxed) { return fora; }
+    registrar_frente(app);
+    let areas = match app.state::<Estado>().areas.lock() {
+        Ok(a) => a.clone(),
+        Err(_) => return fora,
+    };
+    let Ok(cursor) = app.cursor_position() else { return fora };
+    let sobrepostas: Vec<(String, WebviewWindow)> = app.webview_windows().into_iter().filter(|(r, _)| r == "ilha" || r == "assistive" || docks::eh_dock(r)).collect();
+    fora.retain(|r, _| sobrepostas.iter().any(|(s, _)| s == r));
+    for (rotulo, janela) in &sobrepostas {
+        if ENCERRANDO.load(Ordering::Relaxed) { break; }
+        let rotulo = rotulo.as_str();
+        if !janela.is_visible().unwrap_or(false) { continue; }
+        let dentro = if let Some(lista) = areas.get(rotulo).filter(|a| !a.is_empty()) {
+            let (Ok(origem), Ok(escala)) = (janela.outer_position(), janela.scale_factor()) else { continue };
+            let x = (cursor.x - origem.x as f64) / escala;
+            let y = (cursor.y - origem.y as f64) / escala;
+            lista.iter().any(|r| x >= r.x - 4.0 && x <= r.x + r.w + 4.0 && y >= r.y - 4.0 && y <= r.y + r.h + 4.0)
+        } else { false };
+        let agora_fora = !dentro;
+        if fora.get(rotulo) != Some(&agora_fora) {
+            if !ignorar_cursor(janela, agora_fora) { continue; }
+            if agora_fora {
+                let _ = janela.emit_to(rotulo, "niko://cursor-fora", ());
+            }
+            fora.insert(rotulo.to_string(), agora_fora);
+        }
+    }
+    fora
 }
 
 fn sem_prefixo(caminho: std::path::PathBuf) -> std::path::PathBuf {
@@ -324,12 +408,14 @@ fn iniciar_ponte(app: &AppHandle, token: &str, reinicio: bool) {
         use std::os::windows::process::CommandExt;
         comando.creation_flags(0x0800_0000);
     }
+    let estado = app.state::<Estado>();
+    let Ok(mut ponte) = estado.ponte.lock() else { return };
+    if ENCERRANDO.load(Ordering::Relaxed) { return; }
+    if ponte.as_mut().is_some_and(|filho| !matches!(filho.try_wait(), Ok(Some(_)))) { return; }
     match comando.spawn() {
         Ok(filho) => {
             registrar(format!("ponte iniciada: {} {} (pid {})", node.display(), script.display(), filho.id()));
-            if let Ok(mut ponte) = app.state::<Estado>().ponte.lock() {
-                *ponte = Some(filho);
-            }
+            *ponte = Some(filho);
         }
         Err(erro) => registrar(format!("falha ao iniciar a ponte: {} {} {}", node.display(), script.display(), erro)),
     }
@@ -337,32 +423,53 @@ fn iniciar_ponte(app: &AppHandle, token: &str, reinicio: bool) {
 
 fn parar_ponte(app: &AppHandle) {
     ENCERRANDO.store(true, Ordering::Relaxed);
-    if let Ok(mut ponte) = app.state::<Estado>().ponte.lock() {
-        if let Some(mut filho) = ponte.take() {
-            let _ = filho.kill();
-        }
+    let filho = app.state::<Estado>().ponte.lock().ok().and_then(|mut ponte| ponte.take());
+    if let Some(mut filho) = filho {
+        let _ = filho.kill();
+        let _ = filho.wait();
     }
 }
 
+#[tauri::command]
+async fn preparar_atualizacao(app: AppHandle) -> Result<(), String> {
+    if ENCERRAMENTO_PEDIDO.swap(true, Ordering::Relaxed) { return Err("encerramento_em_andamento".into()); }
+    if let Err(erro) = salvamento::salvar(&app).await {
+        ENCERRAMENTO_PEDIDO.store(false, Ordering::Relaxed);
+        return Err(erro);
+    }
+    ENCERRANDO.store(true, Ordering::Relaxed);
+    for (rotulo, janela) in app.webview_windows() {
+        if docks::eh_dock(&rotulo) {
+            barra_windows::reservar_espaco_do_dock(&janela, false);
+        }
+    }
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        barra_windows::restaurar(&app);
+        parar_ponte(&app);
+    }).await;
+    Ok(())
+}
+
 static ENCERRANDO: AtomicBool = AtomicBool::new(false);
+static ENCERRAMENTO_PEDIDO: AtomicBool = AtomicBool::new(false);
 const MAXIMO_REINICIOS_DA_PONTE: u32 = 5;
 
 fn vigiar_ponte(app: AppHandle, token: String) {
     if cfg!(debug_assertions) {
         return;
     }
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn(async move {
         let mut reinicios = 0u32;
         let mut estavel_desde = std::time::Instant::now();
         loop {
-            std::thread::sleep(Duration::from_secs(3));
+            tokio::time::sleep(Duration::from_secs(3)).await;
             if ENCERRANDO.load(Ordering::Relaxed) {
                 return;
             }
             let caiu = match app.state::<Estado>().ponte.lock() {
                 Ok(mut ponte) => match ponte.as_mut() {
                     Some(filho) => matches!(filho.try_wait(), Ok(Some(_))),
-                    None => false,
+                    None => true,
                 },
                 Err(_) => false,
             };
@@ -376,11 +483,13 @@ fn vigiar_ponte(app: AppHandle, token: String) {
                 return;
             }
             reinicios += 1;
-            std::thread::sleep(Duration::from_secs(u64::from(reinicios) * 2));
+            tokio::time::sleep(Duration::from_secs(u64::from(reinicios) * 2)).await;
             if ENCERRANDO.load(Ordering::Relaxed) {
                 return;
             }
-            iniciar_ponte(&app, &token, true);
+            let alvo = app.clone();
+            let chave = token.clone();
+            if tauri::async_runtime::spawn_blocking(move || iniciar_ponte(&alvo, &chave, true)).await.is_err() { return; }
             estavel_desde = std::time::Instant::now();
         }
     });
@@ -388,9 +497,12 @@ fn vigiar_ponte(app: AppHandle, token: String) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // O Niko posiciona janelas por coordenada e lê o cursor global: isso só funciona sob X11/XWayland.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("GDK_BACKEND").is_none() {
-        std::env::set_var("GDK_BACKEND", "x11");
+    {
+        if std::env::var_os("GDK_BACKEND").is_none() {
+            std::env::set_var("GDK_BACKEND", "x11");
+        }
     }
     let token = gerar_token();
     let escondido = std::env::args().any(|a| a == "--escondido");
@@ -403,16 +515,28 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--escondido"])))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _atalho, evento| {
-                    if evento.state() == ShortcutState::Pressed {
-                        mostrar(app);
-                        let _ = app.emit_to("sistema", "niko://captura", ());
+                .with_handler(|app, atalho, evento| {
+                    if evento.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    let Some(acao) = atalhos::acao_de(app, atalho) else { return };
+                    match acao.as_str() {
+                        "lupa" => abrir_lupa(app),
+                        "sistema" => alternar_sistema(app.clone()),
+                        "captura" => {
+                            mostrar(app);
+                            let _ = app.emit_to("sistema", "niko://captura", ());
+                        }
+                        "pedido" | "proximaAba" | "terminal" => atalhos::avisar_janela(app, "ilha", &acao),
+                        _ => atalhos::avisar_janela(app, "sistema", &acao),
                     }
                 })
                 .build(),
         )
         .manage(Estado { areas: Mutex::new(HashMap::new()), token: token.clone(), ponte: Mutex::new(None) })
         .manage(miniaturas::Miniaturas::default())
+        .manage(salvamento::ControleSalvamento::default())
+        .manage(atalhos::Atalhos::default())
         .invoke_handler(tauri::generate_handler![
             area_interativa,
             token_ponte,
@@ -421,19 +545,27 @@ pub fn run() {
             alternar_sistema,
             docks::monitores,
             docks::definir_docks,
+            docks::definir_monitor_da_ilha,
             liberar_sistema_inicial,
+            preparar_atualizacao,
+            salvamento::registrar_armazenamento,
+            salvamento::confirmar_salvamento,
             tempo_ocioso_ms,
             abrir_link,
             sair,
             barra_windows::barra_windows,
             barra_windows::reservar_dock,
             janela_frente::frente_cobre_tela,
-            miniaturas::miniaturas_janelas
+            miniaturas::miniaturas_janelas,
+            atalhos::definir_atalhos,
+            devolver_foco
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
             barra_windows::restaurar(&handle);
-            iniciar_ponte(&handle, &token, false);
+            let alvo_da_ponte = handle.clone();
+            let chave_da_ponte = token.clone();
+            tauri::async_runtime::spawn_blocking(move || iniciar_ponte(&alvo_da_ponte, &chave_da_ponte, false));
             vigiar_ponte(handle.clone(), token.clone());
 
             let monitor = app.primary_monitor()?.or(app.available_monitors()?.into_iter().next());
@@ -466,8 +598,8 @@ pub fn run() {
             if !escondido {
                 ABERTURA_PENDENTE.store(true, Ordering::Relaxed);
                 let reserva = handle.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(LIMITE_DA_ABERTURA);
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(LIMITE_DA_ABERTURA).await;
                     liberar_abertura(&reserva);
                 });
             }
@@ -481,7 +613,8 @@ pub fn run() {
 
             criar_sobreposta(&handle, "ilha", tela_y, tela_x, tela_largura, ALTURA_ILHA)?;
             criar_sobreposta(&handle, "dock", my + mh - ALTURA_DOCK, mx, mw, ALTURA_DOCK)?;
-            for rotulo in ["ilha", "dock"] {
+            criar_sobreposta(&handle, "assistive", my, mx, mw, mh)?;
+            for rotulo in ["ilha", "dock", "assistive"] {
                 if let Some(j) = handle.get_webview_window(rotulo) {
                     ignorar_cursor(&j, true);
                 }
@@ -510,7 +643,7 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            let _ = app.global_shortcut().register("ctrl+alt+space");
+            atalhos::registrar_padrao(&handle);
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -518,6 +651,7 @@ pub fn run() {
 
     app.run(|handle, evento| {
         if let RunEvent::Exit = evento {
+            ENCERRANDO.store(true, Ordering::Relaxed);
             for (rotulo, janela) in handle.webview_windows() {
                 if docks::eh_dock(&rotulo) {
                     barra_windows::reservar_espaco_do_dock(&janela, false);

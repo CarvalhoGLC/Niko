@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
-import { KeyRound, Plug, Trash2, CheckCircle2, ShieldCheck, Sparkles, RefreshCw, ExternalLink, LifeBuoy, ArrowLeft, Cpu, Zap, Globe, ChevronDown } from "lucide-react";
-import { Botao, Campo, AvisoFaixa, ConfirmarModal, Vazio } from "../../componentes/basicos";
+import { KeyRound, Plug, Trash2, CheckCircle2, ShieldCheck, BrainCircuit, RefreshCw, ExternalLink, LifeBuoy, Cpu, Zap, Globe, ChevronDown, Lock, LockOpen } from "lucide-react";
+import { Botao, Campo, AvisoFaixa, ConfirmarModal, Vazio, Modal, Pilulas } from "../../componentes/basicos";
 import { Marca, type MarcaId } from "../../marcas/Marca";
 import { useConfig } from "../../estado/configuracoes";
 import { useInterface } from "../../estado/interface";
@@ -10,9 +9,11 @@ import { estadoDaPonte, salvarProvedor, removerProvedor, testarProvedor, type Pr
 import { CATALOGO_IA, itemDoCatalogo, catalogoPelaUrl, type ItemCatalogo, type CustoProvedor } from "../../dados/provedoresIa";
 
 type Filtro = "todos" | "gratis" | "local" | "pago";
+type Grupo = keyof typeof T.provedoresIa.grupos;
 type Teste = { ok: boolean; modelos: string[]; erro?: string } | "testando";
 
 const C = T.configuracoes.catalogoIa;
+const P = T.provedoresIa;
 
 const MARCA_DO_CATALOGO: Partial<Record<string, MarcaId>> = {
   anthropic: "anthropic",
@@ -29,29 +30,40 @@ const MARCA_DO_CATALOGO: Partial<Record<string, MarcaId>> = {
   lmstudio: "lmstudio",
 };
 
-const ICONE_SEM_MARCA: Record<string, React.ReactNode> = {
-  groq: <Zap size={18} />,
-  cerebras: <Cpu size={18} />,
-  openai: <Sparkles size={18} />,
-  personalizado: <Globe size={18} />,
+const ICONE_SEM_MARCA: Record<string, (tamanho: number) => React.ReactNode> = {
+  groq: (t) => <Zap size={t} />,
+  cerebras: (t) => <Cpu size={t} />,
+  personalizado: (t) => <Globe size={t} />,
 };
 
-function LogoProvedor({ id, tamanho = 18 }: { id?: string; tamanho?: number }) {
+function LogoProvedor({ id, tamanho = 16 }: { id?: string; tamanho?: number }) {
   const marca = id ? MARCA_DO_CATALOGO[id] : undefined;
   if (marca) return <Marca marca={marca} tamanho={tamanho} />;
-  return <>{(id && ICONE_SEM_MARCA[id]) ?? <Plug size={tamanho - 2} />}</>;
+  return <>{id && ICONE_SEM_MARCA[id] ? ICONE_SEM_MARCA[id](tamanho) : <Plug size={tamanho} />}</>;
+}
+
+function grupoDoCusto(custo: CustoProvedor): Grupo {
+  if (custo === "gratis" || custo === "cota") return "gratis";
+  return custo;
 }
 
 function passaNoFiltro(custo: CustoProvedor, filtro: Filtro) {
   if (filtro === "todos") return true;
-  if (filtro === "gratis") return custo === "gratis" || custo === "cota";
-  return custo === filtro;
+  return grupoDoCusto(custo) === filtro;
 }
 
 function ordenarModelos(modelos: string[], sugerido: string) {
   const gratis = modelos.filter((m) => /(:free|-free)$/i.test(m));
   const resto = modelos.filter((m) => !gratis.includes(m));
   return [...new Set([...(sugerido && modelos.includes(sugerido) ? [sugerido] : []), ...gratis, ...resto])];
+}
+
+function ResultadoTeste({ teste }: { teste?: Teste }) {
+  if (!teste) return null;
+  if (teste === "testando") return <span className="ia-teste">{T.configuracoes.testando}</span>;
+  if (!teste.ok) return <span className="ia-teste" data-estado="erro">{T.configuracoes.conexaoFalhou(teste.erro ?? "")}</span>;
+  if (teste.modelos.length === 0) return <span className="ia-teste">{C.semModelos}</span>;
+  return <span className="ia-teste" data-estado="ok">{T.configuracoes.conexaoOk(teste.modelos.length)}</span>;
 }
 
 export function SecaoIa() {
@@ -77,8 +89,10 @@ export function SecaoIa() {
     void recarregar();
   }, []);
 
+  const catalogoDe = (p: Provedor) => p.catalogo ?? catalogoPelaUrl(p.urlBase)?.id;
   const usados = useMemo(() => new Set((ponte?.provedores ?? []).map((p) => p.catalogo ?? catalogoPelaUrl(p.urlBase)?.id)), [ponte]);
   const visiveis = CATALOGO_IA.filter((c) => passaNoFiltro(c.custo, filtro) || c.id === "personalizado");
+  const grupos = (Object.keys(P.grupos) as Grupo[]).map((g) => ({ id: g, itens: visiveis.filter((c) => grupoDoCusto(c.custo) === g) })).filter((g) => g.itens.length > 0);
 
   const escolher = (item: ItemCatalogo) => {
     setEscolhido(item);
@@ -144,118 +158,152 @@ export function SecaoIa() {
 
   if (!ponte.disponivel) return <AvisoFaixa tipo="alerta">{T.configuracoes.ponteIndisponivel}</AvisoFaixa>;
 
-  return (
-    <div className="coluna" style={{ gap: 22 }}>
-      <AvisoFaixa>
-        <span className="linha"><ShieldCheck size={13} />{T.configuracoes.chaveSegura}</span>
-      </AvisoFaixa>
+  const emUso = ponte.provedores.find((p) => p.id === ia.provedorId);
+  const outros = ponte.provedores.filter((p) => p.id !== ia.provedorId);
+  const catalogoEmUso = emUso ? catalogoDe(emUso) : undefined;
+  const modeloDe = (p: Provedor) => ia.modelos[p.id] || (p.id === ia.provedorId ? ia.modelo : "") || p.modelo;
+  const usarNoChat = (p: Provedor) => definir({ ia: { ...ia, provedorId: p.id, modelo: ia.modelos[p.id] ?? "", reservas: [...(ia.provedorId ? [ia.provedorId] : []), ...ia.reservas.filter((x) => x !== p.id)] } });
+  const escolherModelo = (p: Provedor, valor: string) => definir({ ia: { ...ia, modelos: { ...ia.modelos, [p.id]: valor }, ...(p.id === ia.provedorId ? { modelo: valor } : {}) } });
 
-      {ponte.provedores.length === 0 ? (
-        <Vazio icone={<Sparkles size={26} />} titulo={T.configuracoes.semProvedores} texto={T.configuracoes.semProvedoresDica} />
-      ) : (
-        <div className="ia-provedores">
-          {ponte.provedores.map((p) => {
-            const teste = testes[p.id];
-            const emUso = ia.provedorId === p.id;
-            const cat = p.catalogo ?? catalogoPelaUrl(p.urlBase)?.id;
-            const modeloAtual = ia.modelos[p.id] || (emUso ? ia.modelo : "") || p.modelo;
-            const posReserva = ia.reservas.indexOf(p.id);
-            return (
-              <div key={p.id} className="ia-provedor" data-em-uso={emUso ? "sim" : "nao"}>
-                <span className="ia-logo"><LogoProvedor id={cat} /></span>
-                <div className="coluna" style={{ gap: 4, minWidth: 0, flex: 1 }}>
-                  <span className="linha" style={{ flexWrap: "wrap" }}>
-                    <b>{p.nome}</b>
-                    {emUso && <span className="etiqueta etiqueta-sucesso"><CheckCircle2 size={11} />{T.configuracoes.emUso}</span>}
+  const seletorDeModelo = (p: Provedor) => {
+    const teste = testes[p.id];
+    const atual = modeloDe(p);
+    const opcoes = [...new Set([atual, ...(teste && teste !== "testando" && teste.ok ? teste.modelos : [])].filter(Boolean))];
+    return (
+      <select className="seletor ia-modelo" aria-label={T.configuracoes.modeloChat} value={atual} disabled={opcoes.length === 0} title={opcoes.length <= 1 ? T.configuracoes.modeloDica : undefined} onChange={(e) => escolherModelo(p, e.target.value)}>
+        {opcoes.length === 0 && <option value="">{C.modeloOpcional}</option>}
+        {opcoes.map((m) => <option key={m} value={m}>{m}</option>)}
+      </select>
+    );
+  };
+
+  return (
+    <div className="ia-tela">
+      <div className="ia-catalogo">
+        <div className="ia-catalogo-topo">
+          <div className="ia-catalogo-texto">
+            <b>{C.titulo}</b>
+            <span>{C.dica}</span>
+          </div>
+          <Pilulas<Filtro> rotulo={C.titulo} valor={filtro} aoMudar={setFiltro} opcoes={(Object.keys(C.filtros) as Filtro[]).map((f) => ({ valor: f, rotulo: C.filtros[f] }))} />
+        </div>
+        {grupos.map((g) => (
+          <div key={g.id} className="ia-grupo">
+            <span className="ia-grupo-rotulo">{P.grupos[g.id]}</span>
+            <div className="ia-grade">
+              {g.itens.map((item) => {
+                const usado = usados.has(item.id);
+                const selecionado = catalogoEmUso === item.id;
+                return (
+                  <button key={item.id} type="button" className="ia-cartao" data-em-uso={selecionado ? "sim" : "nao"} onClick={() => escolher(item)}>
+                    <span className="ia-cartao-topo">
+                      <span className="ia-cartao-marca">
+                        <span className="ia-logo"><LogoProvedor id={item.id} /></span>
+                        <b className="cortar">{item.nome || C.personalizado}</b>
+                      </span>
+                      <span className="ia-ponto" data-estado={selecionado ? "uso" : usado ? "adicionado" : "livre"} title={selecionado ? T.configuracoes.emUso : usado ? C.jaAdicionado : undefined} />
+                    </span>
+                    <span className="ia-cartao-texto">{C.descricoes[item.id]}</span>
+                    {(item.custo === "cota" || usado) && (
+                      <span className="ia-cartao-rodape">
+                        {item.custo === "cota" && <span className="etiqueta etiqueta-destaque">{C.custos.cota}</span>}
+                        {usado && <span className="ia-cartao-usado"><CheckCircle2 size={11} />{C.jaAdicionado}</span>}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <aside className="ia-lado">
+        <div className="ia-em-uso">
+          <span className="ia-em-uso-rotulo">{P.emUso}</span>
+          {!emUso ? (
+            <Vazio icone={<BrainCircuit size={26} />} titulo={ponte.provedores.length === 0 ? T.configuracoes.semProvedores : P.nenhumEmUso} texto={ponte.provedores.length === 0 ? T.configuracoes.semProvedoresDica : P.nenhumEmUsoDica} />
+          ) : (
+            <>
+              <span className="ia-em-uso-cabecalho">
+                <span className="ia-logo ia-logo-grande"><LogoProvedor id={catalogoEmUso} tamanho={24} /></span>
+                <span className="ia-em-uso-nome">{emUso.nome}</span>
+              </span>
+              {itemDoCatalogo(catalogoEmUso) && (
+                <span className="ia-etiquetas">
+                  <span className={`etiqueta ia-custo-${itemDoCatalogo(catalogoEmUso)!.custo}`}>{C.custos[itemDoCatalogo(catalogoEmUso)!.custo]}</span>
+                </span>
+              )}
+              <div className="ia-campo">
+                <span className="ia-campo-rotulo">{T.configuracoes.modeloPadrao}</span>
+                {seletorDeModelo(emUso)}
+                <ResultadoTeste teste={testes[emUso.id]} />
+              </div>
+              <div className="ia-campo">
+                <span className="ia-campo-rotulo">{P.chaveAcesso}</span>
+                <span className="ia-chave" data-guardada={emUso.temChave ? "sim" : "nao"}>
+                  {emUso.temChave ? <Lock size={13} /> : <LockOpen size={13} />}
+                  {emUso.temChave ? P.chaveGuardada : itemDoCatalogo(catalogoEmUso)?.pedeChave ? T.configuracoes.semChave : P.semChaveDica}
+                </span>
+                {emUso.temChave && <span className="ia-campo-dica">{P.chaveGuardadaDica}</span>}
+              </div>
+              <div className="ia-em-uso-acoes">
+                <Botao variante="primario" className="ia-testar" icone={<RefreshCw size={13} className={testes[emUso.id] === "testando" ? "girando" : ""} />} disabled={testes[emUso.id] === "testando"} onClick={() => void testar(emUso, itemDoCatalogo(catalogoEmUso)?.modeloSugerido)}>{P.testarConexao}</Botao>
+                <Botao icone={<Trash2 size={13} />} onClick={() => setRemover(emUso)}>{P.removerProvedor}</Botao>
+              </div>
+            </>
+          )}
+        </div>
+
+        {outros.length > 0 && (
+          <div className="ia-outros">
+            <span className="ia-grupo-rotulo">{P.seusProvedores}</span>
+            {outros.map((p) => {
+              const cat = catalogoDe(p);
+              const posReserva = ia.reservas.indexOf(p.id);
+              const teste = testes[p.id];
+              return (
+                <div key={p.id} className="ia-provedor">
+                  <div className="ia-provedor-topo">
+                    <span className="ia-logo"><LogoProvedor id={cat} /></span>
+                    <span className="ia-provedor-texto">
+                      <b className="cortar">{p.nome}</b>
+                      <span className="ia-provedor-modelo cortar">{modeloDe(p) || C.modeloOpcional}</span>
+                    </span>
+                    <Botao pequeno soIcone variante="fantasma" icone={<Trash2 size={12} />} aria-label={T.geral.excluir} title={T.geral.excluir} onClick={() => setRemover(p)} />
+                  </div>
+                  <span className="ia-etiquetas">
                     {posReserva >= 0 && <span className="etiqueta" title={T.configuracoes.reservaDica}><LifeBuoy size={11} />{T.configuracoes.reserva(posReserva + 1)}</span>}
                     {cat && itemDoCatalogo(cat) && <span className={`etiqueta ia-custo-${itemDoCatalogo(cat)!.custo}`}>{C.custos[itemDoCatalogo(cat)!.custo]}</span>}
-                    {!p.temChave && itemDoCatalogo(cat)?.pedeChave && <span className="etiqueta">{T.configuracoes.semChave}</span>}
+                    {!p.temChave && itemDoCatalogo(cat)?.pedeChave && <span className="etiqueta etiqueta-alerta">{T.configuracoes.semChave}</span>}
                   </span>
-                  <span className="texto-3 cortar" style={{ fontSize: 12 }}>{modeloAtual || C.modeloOpcional}</span>
-                  {teste === "testando" && <span className="campo-dica">{T.configuracoes.testando}</span>}
-                  {teste && teste !== "testando" && (teste.ok ? (
-                    teste.modelos.length > 0 ? (
-                      <div className="linha" style={{ flexWrap: "wrap" }}>
-                        <span className="campo-dica" style={{ color: "var(--sucesso)" }}>{T.configuracoes.conexaoOk(teste.modelos.length)}</span>
-                        <select className="seletor" style={{ maxWidth: 320, height: 30 }} aria-label={T.configuracoes.modeloChat} value={modeloAtual} onChange={(e) => definir({ ia: { ...ia, modelos: { ...ia.modelos, [p.id]: e.target.value }, ...(emUso ? { modelo: e.target.value } : {}) } })}>
-                          {[...new Set([modeloAtual, ...teste.modelos].filter(Boolean))].map((m) => <option key={m} value={m}>{m}</option>)}
-                        </select>
-                      </div>
-                    ) : (
-                      <span className="campo-dica">{C.semModelos}</span>
-                    )
-                  ) : (
-                    <span className="campo-erro">{T.configuracoes.conexaoFalhou(teste.erro ?? "")}</span>
-                  ))}
-                </div>
-                <div className="linha" style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
-                  {!emUso && <Botao pequeno variante="primario" onClick={() => definir({ ia: { ...ia, provedorId: p.id, modelo: ia.modelos[p.id] ?? "", reservas: [...(ia.provedorId ? [ia.provedorId] : []), ...ia.reservas.filter((x) => x !== p.id)] } })}>{T.configuracoes.usarNoChat}</Botao>}
-                  {!emUso && (
+                  {teste && teste !== "testando" && teste.ok && teste.modelos.length > 0 && seletorDeModelo(p)}
+                  <ResultadoTeste teste={teste} />
+                  <div className="ia-provedor-acoes">
+                    <Botao pequeno variante="primario" onClick={() => usarNoChat(p)}>{T.configuracoes.usarNoChat}</Botao>
                     <Botao
                       pequeno
-                      icone={<LifeBuoy size={13} />}
+                      icone={<LifeBuoy size={12} />}
                       title={T.configuracoes.reservaDica}
                       onClick={() => definir({ ia: { ...ia, reservas: posReserva >= 0 ? ia.reservas.filter((x) => x !== p.id) : [...ia.reservas, p.id] } })}
                     >
                       {posReserva >= 0 ? T.configuracoes.tirarReserva : T.configuracoes.usarReserva}
                     </Botao>
-                  )}
-                  <Botao pequeno icone={<RefreshCw size={13} className={teste === "testando" ? "girando" : ""} />} disabled={teste === "testando"} onClick={() => void testar(p, itemDoCatalogo(cat)?.modeloSugerido)}>{T.configuracoes.testar}</Botao>
-                  <Botao pequeno soIcone variante="fantasma" icone={<Trash2 size={13} />} aria-label={T.geral.excluir} onClick={() => setRemover(p)} />
+                    <Botao pequeno icone={<RefreshCw size={12} className={teste === "testando" ? "girando" : ""} />} disabled={teste === "testando"} onClick={() => void testar(p, itemDoCatalogo(cat)?.modeloSugerido)}>{T.configuracoes.testar}</Botao>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+              );
+            })}
+          </div>
+        )}
+      </aside>
 
-      <AnimatePresence mode="wait" initial={false}>
-        {!escolhido ? (
-          <motion.div key="catalogo" className="coluna" style={{ gap: 14 }} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.18 }}>
-            <div className="linha-entre" style={{ flexWrap: "wrap", gap: 12 }}>
-              <div className="coluna" style={{ gap: 2 }}>
-                <b>{C.titulo}</b>
-                <span className="campo-dica">{C.dica}</span>
-              </div>
-              <div className="pilulas">
-                {(Object.keys(C.filtros) as Filtro[]).map((f) => (
-                  <button key={f} type="button" className="pilula" aria-pressed={filtro === f} onClick={() => setFiltro(f)}>{C.filtros[f]}</button>
-                ))}
-              </div>
-            </div>
-            <div className="ia-catalogo">
-              {visiveis.map((item, i) => (
-                <motion.button
-                  key={item.id}
-                  type="button"
-                  className="ia-opcao"
-                  data-custo={item.custo}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0, transition: { delay: i * 0.02 } }}
-                  onClick={() => escolher(item)}
-                >
-                  <span className="ia-opcao-topo">
-                    <span className="ia-logo"><LogoProvedor id={item.id} /></span>
-                    <b className="cortar">{item.nome || C.personalizado}</b>
-                    {item.id !== "personalizado" && <span className={`etiqueta ia-custo-${item.custo}`}>{C.custos[item.custo]}</span>}
-                  </span>
-                  <span className="ia-opcao-texto">{C.descricoes[item.id]}</span>
-                  {usados.has(item.id) && <span className="ia-opcao-usado"><CheckCircle2 size={12} />{C.jaAdicionado}</span>}
-                </motion.button>
-              ))}
-            </div>
-          </motion.div>
-        ) : (
-          <motion.form key="formulario" className="formulario cartao ia-formulario" onSubmit={salvar} noValidate initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.18 }}>
-            <div className="linha-entre" style={{ gap: 12, flexWrap: "wrap" }}>
-              <span className="linha" style={{ gap: 12 }}>
-                <span className="ia-logo ia-logo-grande"><LogoProvedor id={escolhido.id} tamanho={22} /></span>
-                <span className="coluna" style={{ gap: 2 }}>
-                  <b>{C.configurando(escolhido.nome || C.personalizado)}</b>
-                  <span className="campo-dica">{C.descricoes[escolhido.id]}</span>
-                </span>
-              </span>
-              <Botao pequeno variante="fantasma" icone={<ArrowLeft size={13} />} onClick={() => setEscolhido(null)}>{C.trocar}</Botao>
+      <Modal aberto={!!escolhido} titulo={escolhido ? C.configurando(escolhido.nome || C.personalizado) : ""} aoFechar={() => setEscolhido(null)} largo>
+        {escolhido && (
+          <form className="formulario ia-formulario" onSubmit={salvar} noValidate>
+            <div className="ia-formulario-topo">
+              <span className="ia-logo ia-logo-grande"><LogoProvedor id={escolhido.id} tamanho={22} /></span>
+              <span className="ia-formulario-texto">{C.descricoes[escolhido.id]}</span>
             </div>
 
             {escolhido.id !== "personalizado" && (
@@ -263,7 +311,7 @@ export function SecaoIa() {
                 {(escolhido.custo === "local" ? C.passosLocal : C.passosChave).map((passo, i) => (
                   <li key={passo}>
                     <span className="ia-passo-numero">{i + 1}</span>
-                    <span>{passo}</span>
+                    <span className="ia-passo-texto">{passo}</span>
                     {i === 0 && escolhido.paginaChave && (
                       <a className="botao botao-secundario botao-pequeno" href={escolhido.paginaChave} target="_blank" rel="noopener noreferrer">
                         <ExternalLink size={12} />
@@ -276,13 +324,16 @@ export function SecaoIa() {
             )}
 
             {(escolhido.pedeChave || escolhido.id === "personalizado") && (
-              <Campo id="ia-chave" rotulo={T.conexoes.chave} obrigatorio={escolhido.pedeChave} erro={erros.chave} dica={escolhido.pedeChave ? undefined : T.configuracoes.chaveOpcionalLocal}>
-                <input id="ia-chave" className="campo" type="password" autoComplete="off" spellCheck={false} value={chave} autoFocus onChange={(e) => setChave(e.target.value)} />
-              </Campo>
+              <>
+                <Campo id="ia-chave" rotulo={T.conexoes.chave} obrigatorio={escolhido.pedeChave} erro={erros.chave} dica={escolhido.pedeChave ? undefined : T.configuracoes.chaveOpcionalLocal}>
+                  <input id="ia-chave" className="campo ia-campo-mono" type="password" autoComplete="off" spellCheck={false} value={chave} autoFocus onChange={(e) => setChave(e.target.value)} />
+                </Campo>
+                <span className="ia-aviso-chave"><ShieldCheck size={13} />{T.configuracoes.chaveSegura}</span>
+              </>
             )}
 
             <Campo id="ia-modelo" rotulo={T.configuracoes.modeloPadrao} erro={erros.modelo} dica={C.modeloOpcional}>
-              <input id="ia-modelo" className="campo" value={modelo} maxLength={160} placeholder={escolhido.modeloSugerido || "llama, qwen, gemini..."} onChange={(e) => setModelo(e.target.value)} />
+              <input id="ia-modelo" className="campo ia-campo-mono" value={modelo} maxLength={160} placeholder={escolhido.modeloSugerido || "llama, qwen, gemini..."} onChange={(e) => setModelo(e.target.value)} />
             </Campo>
 
             <button type="button" className="ia-avancado" aria-expanded={avancado} onClick={() => setAvancado(!avancado)}>
@@ -296,7 +347,7 @@ export function SecaoIa() {
                 </Campo>
                 {escolhido.tipo === "openai_compativel" && (
                   <Campo id="ia-url" rotulo={T.configuracoes.urlBase} obrigatorio erro={erros.url} dica={T.configuracoes.urlDica}>
-                    <input id="ia-url" className="campo" value={urlBase} inputMode="url" placeholder="https://.../v1" onChange={(e) => setUrlBase(e.target.value)} />
+                    <input id="ia-url" className="campo ia-campo-mono" value={urlBase} inputMode="url" placeholder="https://.../v1" onChange={(e) => setUrlBase(e.target.value)} />
                   </Campo>
                 )}
               </div>
@@ -307,9 +358,9 @@ export function SecaoIa() {
               <Botao onClick={() => setEscolhido(null)}>{T.geral.cancelar}</Botao>
               <Botao type="submit" variante="primario" icone={<KeyRound size={14} />} disabled={salvando}>{salvando ? T.configuracoes.salvandoChave : T.configuracoes.salvarProvedor}</Botao>
             </div>
-          </motion.form>
+          </form>
         )}
-      </AnimatePresence>
+      </Modal>
 
       <ConfirmarModal
         aberto={!!remover}

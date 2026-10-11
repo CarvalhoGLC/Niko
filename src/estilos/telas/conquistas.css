@@ -1,0 +1,207 @@
+.estilo-sistema .conquistas-mapa {
+  display: grid;
+  grid-template-columns: auto minmax(12px, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--borda);
+  border-radius: 14px;
+  background: var(--superficie);
+}
+
+.estilo-sistema .conquistas-mapa .mapa-calor {
+  display: contents;
+}
+
+.estilo-sistema .conquistas-mapa-titulo { grid-row: 1; grid-column: 1; }
+.estilo-sistema .conquistas-mapa .pilulas { grid-row: 1; grid-column: 3; }
+.estilo-sistema .conquistas-mapa .mapa-calor-rolagem { grid-row: 2; grid-column: 1 / -1; }
+
+.estilo-sistema .conquistas-mapa .mapa-legenda {
+  grid-row: 3;
+  grid-column: 1 / -1;
+  justify-self: end;
+  font-family: var(--fonte-mono);
+  font-size: 11px;
+}
+
+@container conteudo (max-width: 560px) {
+  .estilo-sistema .conquistas-mapa .pilulas {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .estilo-sistema .conquistas-mapa .mapa-calor-rolagem { grid-row: 3; }
+  .estilo-sistema .conquistas-mapa .mapa-legenda { grid-row: 4; }
+}
+
+.estilo-sistema .conquistas-mapa .pilulas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 9px;
+  border: 1px solid var(--borda);
+  background: var(--fundo-barra);
+}
+
+.estilo-sistema .conquistas-mapa .pilula {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--texto-3);
+  font-size: 11.5px;
+}
+
+.estilo-sistema .conquistas-mapa .pilula:hover {
+  color: var(--texto);
+}
+
+.estilo-sistema .conquistas-mapa .pilula[aria-pressed="true"] {
+  background: var(--borda-controle);
+  color: var(--texto);
+}
+
+[data-tema="claro"] .estilo-sistema .conquistas-mapa .pilula[aria-pressed="true"] {
+  background: var(--superficie);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.estilo-sistema .conquistas-mapa .mapa-celula {
+  border-radius: 2px;
+}
+
+.estilo-sistema .conquistas-secao {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.estilo-sistema .conquistas-titulo-apagado {
+  color: var(--texto-2);
+}
+
+.estilo-sistema .conquistas-grade {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap: 10px;
+}
+
+.estilo-sistema .conquistas-cartao {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border-radius: 12px;
+  transition: border-color 0.15s;
+}
+
+.estilo-sistema .conquistas-cartao[data-alcancada="sim"] {
+  border: 1px solid color-mix(in srgb, var(--alerta) 14%, var(--borda-suave));
+  background: linear-gradient(135deg, var(--alerta-suave), var(--superficie) 70%);
+}
+
+.estilo-sistema .conquistas-cartao[data-alcancada="sim"]:hover {
+  border-color: color-mix(in srgb, var(--alerta) 30%, var(--borda-suave));
+}
+
+.estilo-sistema .conquistas-cartao[data-alcancada="nao"] {
+  border: 1px dashed var(--borda-forte);
+}
+
+.estilo-sistema .conquistas-icone {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--superficie-3);
+  color: var(--texto-4);
+}
+
+.estilo-sistema .conquistas-cartao[data-alcancada="sim"] .conquistas-icone {
+  background: color-mix(in srgb, var(--alerta) 14%, transparent);
+  color: var(--alerta);
+}
+
+.estilo-sistema .conquistas-texto {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.estilo-sistema .conquistas-topo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.estilo-sistema .conquistas-nome {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--texto);
+}
+
+.estilo-sistema .conquistas-cartao[data-alcancada="nao"] .conquistas-nome {
+  font-weight: 500;
+  color: var(--texto-2);
+}
+
+.estilo-sistema .conquistas-nivel {
+  flex: 0 0 auto;
+  font-family: var(--fonte-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  color: var(--alerta);
+}
+
+.estilo-sistema .conquistas-regra {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--texto-2);
+}
+
+.estilo-sistema .conquistas-cartao[data-alcancada="nao"] .conquistas-regra {
+  color: var(--texto-3);
+}
+
+.estilo-sistema .conquistas-niveis {
+  display: flex;
+  gap: 3px;
+  margin: 3px 0 1px;
+}
+
+.estilo-sistema .conquistas-niveis > span {
+  flex: 1 1 0;
+  max-width: 28px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--borda-forte);
+}
+
+.estilo-sistema .conquistas-niveis > span[data-feito] {
+  background: var(--alerta);
+}
+
+.estilo-sistema .conquistas-detalhe {
+  font-size: 10.5px;
+  color: var(--texto-3);
+}
+
+.estilo-sistema .conquistas-cartao[data-alcancada="nao"] .conquistas-detalhe {
+  color: var(--texto-4);
+}
+
+.estilo-sistema .conquistas-personagem {
+  flex: 0 0 auto;
+  align-self: flex-start;
+}

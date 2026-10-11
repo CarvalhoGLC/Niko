@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { CircleCheck, CircleDashed, Link2, Link2Off, RefreshCw, TriangleAlert } from "lucide-react";
-import { Botao, Modal, AvisoFaixa, LinhaAlternador } from "../../componentes/basicos";
+import { Botao, Modal, AvisoFaixa } from "../../componentes/basicos";
+import { AlternadorAjuste, LinhaAjuste, NotaAjuste } from "./LinhaAjuste";
 import { Marca } from "../../marcas/Marca";
 import { useConfig } from "../../estado/configuracoes";
 import { useInterface } from "../../estado/interface";
@@ -72,60 +73,65 @@ export function SecaoClaudeCode() {
   const instalado = Boolean(estado?.instalado || estado?.parcial || estado?.desatualizado);
 
   return (
-    <div className="coluna" style={{ gap: 16 }}>
-      <div className="claude-config-topo">
-        <span className="claude-config-marca">
-          <Marca marca="claudecode" tamanho={26} />
-        </span>
-        <div className="coluna" style={{ gap: 2, minWidth: 0 }}>
-          <b>{C.titulo}</b>
-          <span className="campo-dica">{C.texto}</span>
-        </div>
-        <span className="claude-config-estado" data-tipo={s.tipo}>
+    <>
+      <LinhaAjuste
+        rotulo={C.titulo}
+        dica={C.texto}
+        inicio={
+          <span className="ajuste-caixa-icone ajuste-caixa-icone-grande">
+            <Marca marca="claudecode" tamanho={20} />
+          </span>
+        }
+      >
+        <span className="ajuste-estado" data-tipo={s.tipo}>
           {s.tipo === "ok" ? <CircleCheck size={13} /> : s.tipo === "alerta" ? <TriangleAlert size={13} /> : <CircleDashed size={13} />}
           {s.rotulo}
         </span>
-      </div>
+      </LinhaAjuste>
 
-      <ul className="claude-config-lista">
-        {C.recursos.map((r) => (
-          <li key={r}>{r}</li>
-        ))}
-      </ul>
+      <NotaAjuste>
+        <ul className="ajuste-lista-recursos">
+          {C.recursos.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
+      </NotaAjuste>
 
-      {erro && <AvisoFaixa tipo="erro">{erro}</AvisoFaixa>}
-      {estado?.invalido && <AvisoFaixa tipo="alerta">{C.invalidoDica}</AvisoFaixa>}
+      {(erro || estado?.invalido) && (
+        <NotaAjuste>
+          {erro && <AvisoFaixa tipo="erro">{erro}</AvisoFaixa>}
+          {estado?.invalido && <AvisoFaixa tipo="alerta">{C.invalidoDica}</AvisoFaixa>}
+        </NotaAjuste>
+      )}
 
-      <div className="linha" style={{ gap: 8, flexWrap: "wrap" }}>
-        <Botao variante="primario" icone={instalado ? <RefreshCw size={14} /> : <Link2 size={14} />} disabled={estado?.invalido} onClick={() => abrirPrevia("instalar")}>
-          {instalado ? C.reconectar : C.conectar}
-        </Botao>
+      <LinhaAjuste rotulo={T.configuracoes.conexaoClaude}>
         {instalado && (
-          <Botao variante="perigo" icone={<Link2Off size={14} />} disabled={estado?.invalido} onClick={() => abrirPrevia("remover")}>
+          <Botao variante="perigo" icone={<Link2Off size={13} />} disabled={estado?.invalido} onClick={() => abrirPrevia("remover")}>
             {C.remover}
           </Botao>
         )}
-      </div>
+        <Botao variante="primario" icone={instalado ? <RefreshCw size={13} /> : <Link2 size={13} />} disabled={estado?.invalido} onClick={() => abrirPrevia("instalar")}>
+          {instalado ? C.reconectar : C.conectar}
+        </Botao>
+      </LinhaAjuste>
 
-      <LinhaAlternador rotulo={C.mostrarAba} dica={C.mostrarAbaDica} ligado={ilha.blocos.claude} aoMudar={(v) => definirIlha({ blocos: { ...ilha.blocos, claude: v } })} />
-      <div className="coluna" style={{ gap: 4 }}>
-        <LinhaAlternador
-          rotulo={C.notificar}
-          ligado={notificar}
-          aoMudar={(v) => {
-            if (!v) return definir({ notificarClaude: false });
-            void permitirNotificacoes().then((ok) => {
-              definir({ notificarClaude: ok });
-              if (!ok) setErro(C.notificarNegado);
-            });
-          }}
-        />
-        <span className="campo-dica">{C.notificarDica}</span>
-      </div>
+      <AlternadorAjuste rotulo={C.mostrarAba} dica={C.mostrarAbaDica} ligado={ilha.blocos.claude} aoMudar={(v) => definirIlha({ blocos: { ...ilha.blocos, claude: v } })} />
+      <AlternadorAjuste
+        rotulo={C.notificar}
+        dica={C.notificarDica}
+        ligado={notificar}
+        aoMudar={(v) => {
+          if (!v) return definir({ notificarClaude: false });
+          void permitirNotificacoes().then((ok) => {
+            definir({ notificarClaude: ok });
+            if (!ok) setErro(C.notificarNegado);
+          });
+        }}
+      />
 
       <Modal aberto={!!previa} titulo={previa?.acao === "remover" ? C.previaRemover : C.previaConectar} aoFechar={() => setPrevia(null)} largo>
         {previa && (
-          <div className="coluna" style={{ gap: 12 }}>
+          <div className="formulario">
             <div className="campo-grupo">
               <span className="campo-rotulo">{C.arquivo}</span>
               <code className="claude-config-caminho">{previa.dados.caminho}</code>
@@ -152,6 +158,6 @@ export function SecaoClaudeCode() {
           </div>
         )}
       </Modal>
-    </div>
+    </>
   );
 }

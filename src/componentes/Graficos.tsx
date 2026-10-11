@@ -24,7 +24,7 @@ export function BarrasHorizontais({ barras, formatar }: { barras: Barra[]; forma
   );
 }
 
-export function BarrasVerticais({ barras, formatar, altura = 140, aoEscolher, selecionada }: { barras: Barra[]; formatar: (v: number) => string; altura?: number; aoEscolher?: (i: number) => void; selecionada?: number }) {
+export function BarrasVerticais({ barras, formatar, altura = 140, aoEscolher, selecionada }: { barras: Barra[]; formatar: (v: number) => string; altura?: number | string; aoEscolher?: (i: number) => void; selecionada?: number }) {
   const [ativa, setAtiva] = useState<number | null>(null);
   const maximo = Math.max(1, ...barras.map((b) => b.valor));
   return (

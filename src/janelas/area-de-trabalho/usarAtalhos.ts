@@ -7,6 +7,7 @@ import { useRotina } from "../../estado/rotina";
 import { tocarSom } from "../../ponte/sons";
 import { T } from "../../textos/textos";
 import { rotaLigada } from "../../utilitarios/funcoes";
+import { ACOES_GLOBAIS, combinaCom, type AcaoGlobal } from "../../utilitarios/atalhos";
 
 function emCampoDeTexto(alvo: EventTarget | null): boolean {
   const el = alvo as HTMLElement | null;
@@ -23,33 +24,27 @@ export function usarAtalhos() {
       const cfg = useConfig.getState();
       const tecla = e.key.toLowerCase();
 
-      if (e.ctrlKey && e.altKey) {
-        if (e.code === "Space") {
+      const acao = ACOES_GLOBAIS.find((a) => cfg.atalhosGlobais[a] && combinaCom(e, cfg.atalhosGlobais[a]));
+      if (acao) {
+        const executar: Partial<Record<AcaoGlobal, () => void>> = {
+          captura: () => ui.abrirCaptura(true),
+          pomodoro: () => {
+            usePomodoro.getState().alternar();
+            void tocarSom("blip");
+          },
+          midia: () => useMidia.getState().alternar(),
+          privacidade: () => cfg.definir({ privacidade: !cfg.privacidade }),
+          naoPerturbe: () => cfg.definir({ naoPerturbe: !cfg.naoPerturbe }),
+          sistema: () => {
+            const visivel = ui.sistemaAberto && !ui.sistemaMinimizado;
+            ui.definirSistema(visivel ? { sistemaMinimizado: true } : { sistemaAberto: true, sistemaMinimizado: false });
+            if (!visivel) ui.focarSistema();
+          },
+        };
+        const fn = executar[acao];
+        if (fn) {
           e.preventDefault();
-          ui.abrirCaptura(true);
-          return;
-        }
-        if (tecla === "p") {
-          e.preventDefault();
-          usePomodoro.getState().alternar();
-          void tocarSom("blip");
-          return;
-        }
-        if (tecla === "m") {
-          e.preventDefault();
-          useMidia.getState().alternar();
-          return;
-        }
-        if (tecla === "h") {
-          e.preventDefault();
-          cfg.definir({ privacidade: !cfg.privacidade });
-          return;
-        }
-        if (tecla === "n") {
-          e.preventDefault();
-          const visivel = ui.sistemaAberto && !ui.sistemaMinimizado;
-          ui.definirSistema(visivel ? { sistemaMinimizado: true } : { sistemaAberto: true, sistemaMinimizado: false });
-          if (!visivel) ui.focarSistema();
+          fn();
           return;
         }
       }

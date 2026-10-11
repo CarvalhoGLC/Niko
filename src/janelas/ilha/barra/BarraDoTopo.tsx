@@ -15,7 +15,7 @@ import { Bandeja } from "./Bandeja";
 import { Personalizacao } from "./Personalizacao";
 import { criarAlternadorDoIniciar } from "./acoesDaBarra";
 import { useIlha } from "../../../estado/ilha";
-import { BateriaDesenhada, IconeDeVolume, IconeDeWifi, wifiLigado } from "./IconesDeStatus";
+import { BateriaDesenhada, IconeDeRede, IconeDeVolume, situacaoDaRede, wifiLigado } from "./IconesDeStatus";
 import { atributosDoFundo, variaveisDaBorda } from "../../aparencia";
 import type { AparenciaDeBorda } from "../../../utilitarios/cores";
 import "./barra.css";
@@ -38,7 +38,11 @@ interface PropsBarra {
   aoUsar: (emUso: boolean) => void;
 }
 
-function rotuloDoWifi(rede: EstadoSistema) {
+function rotuloDaRede(rede: EstadoSistema) {
+  const situacao = situacaoDaRede(rede);
+  if (situacao === "cabo") return T.ilha.barra.cabo;
+  if (situacao === "semInternet") return T.ilha.barra.semInternet;
+  if (situacao === "desconectado") return T.ilha.barra.semConexao;
   if (!wifiLigado(rede)) return T.ilha.barra.wifiDesligado;
   return rede.wifi.conectado && rede.wifi.ssid ? T.ilha.barra.wifi(rede.wifi.ssid) : T.ilha.barra.wifiSemRede;
 }
@@ -111,7 +115,10 @@ function LadoDireito({ pop, alternarPainel, alternarBandeja }: { pop: Pop; alter
   const saida = useControleRapido((s) => s.audio?.saida ?? null);
   const rede = useControleRapido((s) => s.rede);
   const definirVolume = useControleRapido((s) => s.definirVolume);
-  const bateria = rede?.bateria ?? null;
+  const icones = useConfig((s) => s.ilha.iconesDaBarra);
+  const bateria = icones.bateria ? (rede?.bateria ?? null) : null;
+  const mostrarRede = icones.rede && rede;
+  const mostrarVolume = icones.volume && saida;
 
   return (
     <div className="ilha-barra-lado ilha-barra-lado-direito">
@@ -127,12 +134,12 @@ function LadoDireito({ pop, alternarPainel, alternarBandeja }: { pop: Pop; alter
         <ChevronUp size={14} className="ilha-barra-chevron" />
       </button>
       <button type="button" className="ilha-barra-botao ilha-barra-status" data-ativo={pop?.tipo === "painel" || undefined} aria-label={T.ilha.barra.painel} aria-expanded={pop?.tipo === "painel"} title={T.ilha.barra.painel} onClick={alternarPainel}>
-        {rede && rede.wifi.existe && (
-          <span className="ilha-barra-indicador" title={rotuloDoWifi(rede)}>
-            <IconeDeWifi rede={rede} tamanho={14} />
+        {mostrarRede && (
+          <span className="ilha-barra-indicador" title={rotuloDaRede(rede)} data-alerta={situacaoDaRede(rede) === "semInternet" || undefined}>
+            <IconeDeRede rede={rede} tamanho={14} />
           </span>
         )}
-        {saida && (
+        {mostrarVolume && (
           <span
             className="ilha-barra-indicador"
             title={`${saida.mudo ? T.ilha.barra.volumeMudo : T.ilha.barra.volume(saida.volume)}. ${T.ilha.barra.rolarParaVolume}`}
@@ -147,7 +154,7 @@ function LadoDireito({ pop, alternarPainel, alternarBandeja }: { pop: Pop; alter
             <BateriaDesenhada nivel={bateria.nivel} carregando={bateria.carregando} />
           </span>
         )}
-        {!rede && !saida && <SlidersHorizontal size={13} />}
+        {!mostrarRede && !mostrarVolume && !bateria && <SlidersHorizontal size={13} />}
       </button>
     </div>
   );
@@ -156,7 +163,8 @@ function LadoDireito({ pop, alternarPainel, alternarBandeja }: { pop: Pop; alter
 export function BarraDoTopo({ visivel, escala, larguraDaIlha, aparencia, aoAbrirAba, aoUsar }: PropsBarra) {
   const [pop, setPop] = useState<Pop>(null);
   const [sobre, setSobre] = useState(false);
-  usarAudio(visivel, pop?.tipo === "painel" ? 1000 : 3000);
+  const playerAberto = useIlha((s) => s.estado === "expandida" && s.aba === "midia");
+  usarAudio(visivel || playerAberto, pop?.tipo === "painel" ? 1000 : 3000);
   usarRede(visivel, pop?.tipo === "painel" ? 8000 : 30000);
   usarCursorFora(useCallback(() => setSobre(false), []));
 

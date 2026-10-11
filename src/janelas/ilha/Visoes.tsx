@@ -9,7 +9,7 @@ import { useMidia, posicaoAtual, capaDaFaixa, fundoDaCapa } from "../../estado/m
 import { usePomodoro, restanteAtual, formatarRelogio } from "../../estado/pomodoro";
 import { useEstudos } from "../../estado/estudos";
 import { useOrganizacao } from "../../estado/organizacao";
-import { useComunicacao } from "../../estado/comunicacao";
+import { falhasNaoVistas, useComunicacao } from "../../estado/comunicacao";
 import { useAgentes } from "../../estado/agentes";
 import { useConfig, type SecaoHoje } from "../../estado/configuracoes";
 import { useInterface } from "../../estado/interface";
@@ -18,8 +18,12 @@ import { Marca, MARCAS, marcaDoApp } from "../../marcas/Marca";
 import { Anel } from "../../componentes/Graficos";
 import { T } from "../../textos/textos";
 import { deISO, formatarData, hojeISO, paraISO, horarioRelativo } from "../../utilitarios/datas";
-import { itensDoCalendario } from "../../utilitarios/itensDoCalendario";
+import { itemFeito, itensDoCalendario, podeMarcarFeito, repeteTodoDia, type ItemDoCalendario } from "../../utilitarios/itensDoCalendario";
+import { marcarItemFeito } from "../../utilitarios/marcarFeito";
+import { usarAgendaGoogle } from "../../modulos/calendario/usarAgendaGoogle";
 import { ConexaoNaIlha } from "./ConexaoNaIlha";
+import { conexaoEmTestes } from "../../utilitarios/disponibilidadeConexoes";
+import { VolumeDoPlayer } from "./VolumeDoPlayer";
 import { EspacoDoPersonagem } from "./animacoes/PersonagemContinuo";
 import { funcaoLigada, secoesDoHojeLigadas } from "../../utilitarios/funcoes";
 import { useFinancas } from "../../estado/financas";
@@ -30,7 +34,7 @@ import { SeletorDeCategoria } from "../../componentes/SeletorDeCategoria";
 import { formatarDinheiro } from "../../utilitarios/dinheiro";
 import { tocarSom } from "../../ponte/sons";
 import { addMonths, eachDayOfInterval, endOfMonth, endOfWeek, isSameMonth, startOfMonth, startOfWeek } from "date-fns";
-import type { CartaoConfirmacao, EtapaPomodoro } from "../../tipos";
+import type { CartaoConfirmacao, EtapaPomodoro, ServicoId } from "../../tipos";
 
 function Cartao({ veu, children }: { veu?: string; children: React.ReactNode }) {
   return (
@@ -324,7 +328,7 @@ export function VisaoMidia() {
 
   return (
     <Cartao veu={c1}>
-      <div className="linha" style={{ gap: 26, flex: 1 }}>
+      <div className="ilha-player" style={{ ["--cor-capa" as string]: c1 }}>
         <div className="ilha-capa-com-personagem">
           <div className="ilha-capa" style={{ width: 96, height: 96, borderRadius: 10, background: fundoDaCapa(faixa), boxShadow: `0 8px 24px ${c1}55` }} />
           <EspacoDoPersonagem tamanho={38} posicao="expandida" flutuar className="ilha-capa-personagem" />
@@ -367,7 +371,8 @@ export function VisaoMidia() {
             <span>{fmt(faixa.duracao)}</span>
           </div>
         </div>
-        <div className="linha" style={{ gap: 4 }}>
+        <div className="ilha-player-controles">
+        <div className="linha" style={{ gap: 4, justifyContent: "center" }}>
           <button type="button" className="ilha-botao ilha-botao-redondo" aria-label={T.ilha.anterior} disabled={!midia.podeVoltar} onClick={midia.anterior}>
             <SkipBack size={15} />
           </button>
@@ -377,6 +382,8 @@ export function VisaoMidia() {
           <button type="button" className="ilha-botao ilha-botao-redondo" aria-label={T.ilha.proxima} disabled={!midia.podeAvancar} onClick={midia.proxima}>
             <SkipForward size={15} />
           </button>
+        </div>
+        <VolumeDoPlayer />
         </div>
       </div>
     </Cartao>
@@ -509,12 +516,12 @@ function SecaoHabitos() {
   );
 }
 
-export function VisaoConexoes() {
+export function VisaoConexoes({ aberta, aoSelecionar }: { aberta: ServicoId | null; aoSelecionar: (servico: ServicoId | null) => void }) {
   const conexoes = useComunicacao((s) => s.conexoes);
   const eventos = useComunicacao((s) => s.eventosConexao);
+  const marcarFalhasVistas = useComunicacao((s) => s.marcarFalhasVistas);
   const abrirJanela = useInterface((s) => s.abrirJanelaConexao);
   const irPara = useInterface((s) => s.irPara);
-  const [aberta, setAberta] = useState<string | null>(null);
   const lista = [...conexoes].sort((a, b) => Number(b.ligada) - Number(a.ligada) || Number(b.fixadaNaIlha) - Number(a.fixadaNaIlha));
   const ligadas = conexoes.filter((c) => c.ligada).length;
   const atual = conexoes.find((c) => c.id === aberta);
@@ -532,7 +539,7 @@ export function VisaoConexoes() {
               <div className="ilha-conexoes-grade">
                 {lista.map((c, i) => {
                   const cor = `#${MARCAS[c.id].hex}`;
-                  const falhas = eventos.filter((e) => e.servico === c.id && e.tipo === "falha").length;
+                  const falhas = falhasNaoVistas(c, eventos);
                   return (
                     <motion.button
                       key={c.id}
@@ -544,18 +551,21 @@ export function VisaoConexoes() {
                       animate={{ opacity: 1, y: 0, scale: 1, transition: { delay: i * 0.03, type: "spring", visualDuration: 0.3, bounce: 0.3 } }}
                       whileHover={{ y: -2 }}
                       whileTap={{ scale: 0.96 }}
+                      title={conexaoEmTestes(c.id) ? T.conexoes.emTestesDica : undefined}
+                      disabled={conexaoEmTestes(c.id)}
                       onClick={() => {
                         void tocarSom("blip");
-                        setAberta(c.id);
+                        if (falhas > 0) marcarFalhasVistas(c.id);
+                        aoSelecionar(c.id);
                       }}
                     >
                       <span className="ilha-conexao-logo"><Marca marca={c.id} tamanho={17} /></span>
                       <span className="ilha-conexao-textos">
-                        <span className="ilha-conexao-nome">
-                          {T.conexoes.servicos[c.id].nome}
+                        <span className="ilha-conexao-nome" title={T.conexoes.servicos[c.id].nome}>
+                          <span className="ilha-conexao-nome-texto">{T.conexoes.servicos[c.id].nome}</span>
                           <span className="ilha-conexao-estado" data-status={c.ligada ? c.status : "desligada"} />
                         </span>
-                        <span className="ilha-conexao-resumo cortar privado">{c.ligada ? c.resumo || T.conexoes.status[c.status] : T.ilha.conexaoDesligada}</span>
+                        <span className="ilha-conexao-resumo cortar privado">{conexaoEmTestes(c.id) ? T.conexoes.emTestes : c.ligada ? c.resumo || T.conexoes.status[c.status] : T.ilha.conexaoDesligada}</span>
                       </span>
                       {c.ligada && falhas > 0 && <span className="ilha-conexao-selo">{falhas}</span>}
                     </motion.button>
@@ -567,7 +577,7 @@ export function VisaoConexoes() {
         ) : (
           <motion.div key={atual.id} className="coluna" style={{ gap: 8, minHeight: 0, flex: 1 }} initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0, transition: { type: "spring", visualDuration: 0.28, bounce: 0.2 } }} exit={{ opacity: 0, x: 18, transition: { duration: 0.15 } }}>
             <div className="linha" style={{ gap: 8 }}>
-              <button type="button" className="ilha-botao ilha-botao-icone" aria-label={T.geral.voltar} title={T.geral.voltar} onClick={() => setAberta(null)}>
+              <button type="button" className="ilha-botao ilha-botao-icone" aria-label={T.geral.voltar} title={T.geral.voltar} onClick={() => aoSelecionar(null)}>
                 <ChevronLeft size={14} />
               </button>
               <span className="ilha-conexao-logo" style={{ ["--marca" as string]: `#${MARCAS[atual.id].hex}` }}><Marca marca={atual.id} tamanho={17} /></span>
@@ -575,7 +585,7 @@ export function VisaoConexoes() {
                 <span className="ilha-titulo">{T.conexoes.servicos[atual.id].nome}</span>
                 <span className="ilha-mini cortar">{atual.ligada ? `${T.conexoes.status[atual.status]} . ${atual.ultimaAtualizacao ? T.conexoes.atualizado(horarioRelativo(atual.ultimaAtualizacao)) : T.conexoes.nunca}` : T.ilha.conexaoDesligada}</span>
               </span>
-              {atual.ligada ? (
+              {conexaoEmTestes(atual.id) ? <span className="ilha-mini">{T.conexoes.emTestes}</span> : atual.ligada ? (
                 <button type="button" className="ilha-botao" onClick={() => abrirJanela(atual.id)}>
                   <ArrowUpRight size={13} />
                   {T.ilha.abrirConexao}
@@ -586,7 +596,7 @@ export function VisaoConexoes() {
                 </button>
               )}
             </div>
-            {atual.ligada && <ConexaoNaIlha servico={atual.id} />}
+            {conexaoEmTestes(atual.id) ? <span className="ilha-sub">{T.conexoes.emTestesDica}</span> : atual.ligada && <ConexaoNaIlha servico={atual.id} />}
           </motion.div>
         )}
       </AnimatePresence>
@@ -597,6 +607,7 @@ function SecaoAgenda() {
   const eventos = useOrganizacao((s) => s.eventos);
   const metas = useOrganizacao((s) => s.metas);
   const tarefas = useRotina((s) => s.tarefas);
+  const habitos = useRotina((s) => s.habitos);
   const datas = useEstudos((s) => s.datas);
   const revisoes = useEstudos((s) => s.revisoesConteudo);
   const recorrentes = useFinancas((s) => s.recorrentes);
@@ -609,10 +620,19 @@ function SecaoAgenda() {
   const inicio = paraISO(dias[0]);
   const fim = paraISO(dias[dias.length - 1]);
   const desligadas = useConfig((s) => s.funcoesDesligadas);
-  const dados = useMemo(() => ({ eventos, metas, tarefas, datas, revisoes, recorrentes }), [eventos, metas, tarefas, datas, revisoes, recorrentes, desligadas]);
-  const comCompromisso = useMemo(() => new Set(itensDoCalendario(dados, inicio, fim).map((i) => i.data)), [dados, inicio, fim]);
-  const deHoje = useMemo(() => itensDoCalendario(dados, hoje, hoje), [dados, hoje]);
+  const dados = useMemo(() => ({ eventos, metas, tarefas, habitos, datas, revisoes, recorrentes }), [eventos, metas, tarefas, habitos, datas, revisoes, recorrentes, desligadas]);
+  const google = usarAgendaGoogle(funcaoLigada("calendario", desligadas) ? [[inicio, fim], [hoje, hoje]] : []);
+  const comCompromisso = useMemo(
+    () => new Set([...itensDoCalendario(dados, inicio, fim).filter((i) => !repeteTodoDia(i)).map((i) => i.data), ...google.eventos.map((e) => e.data)]),
+    [dados, inicio, fim, google.eventos],
+  );
+  const deHoje = useMemo(() => {
+    const doGoogle: ItemDoCalendario[] = google.eventos.filter((e) => e.data === hoje).map((e) => ({ id: `google-${e.id}`, titulo: e.titulo, data: e.data, hora: e.hora, fonte: "google", link: e.link }));
+    return [...itensDoCalendario(dados, hoje, hoje), ...doGoogle].sort((a, b) => (a.hora ?? "99").localeCompare(b.hora ?? "99"));
+  }, [dados, hoje, google.eventos]);
   const C = T.ilha.calendario;
+  const registros = useRotina((s) => s.registros);
+  const deHojeOrdenado = [...deHoje].sort((a, b) => Number(itemFeito(a, registros)) - Number(itemFeito(b, registros)));
 
   useEffect(() => {
     const t = window.setInterval(() => setAgora(new Date()), 15000);
@@ -635,12 +655,32 @@ function SecaoAgenda() {
             <span className="ilha-sub">{C.semNadaHoje}</span>
           ) : (
             <>
-              {deHoje.slice(0, 3).map((item) => (
-                <button key={item.id} type="button" className="ilha-calendario-item" onClick={() => abrirDia(hoje)}>
-                  <span className="ilha-calendario-item-hora numero">{item.hora ?? C.diaTodo}</span>
-                  <span className="cortar privado">{item.titulo}</span>
-                </button>
-              ))}
+              {deHojeOrdenado.slice(0, 3).map((item) => {
+                const feito = itemFeito(item, registros);
+                return (
+                  <div key={item.id} className="ilha-calendario-item" data-feito={feito || undefined}>
+                    {podeMarcarFeito(item) && (
+                      <button
+                        type="button"
+                        className="ilha-calendario-check"
+                        aria-pressed={feito}
+                        aria-label={feito ? T.calendario.desmarcarFeito(item.titulo) : T.calendario.marcarFeito(item.titulo)}
+                        title={feito ? T.calendario.desmarcarFeito(item.titulo) : T.calendario.marcarFeito(item.titulo)}
+                        onClick={() => {
+                          void tocarSom(feito ? "blip" : "approve");
+                          marcarItemFeito(item, !feito);
+                        }}
+                      >
+                        {feito && <Check size={10} strokeWidth={3} />}
+                      </button>
+                    )}
+                    <button type="button" className="ilha-calendario-item-abrir" onClick={() => abrirDia(hoje)}>
+                      <span className="ilha-calendario-item-hora numero">{item.hora ?? C.diaTodo}</span>
+                      <span className="cortar privado">{item.titulo}</span>
+                    </button>
+                  </div>
+                );
+              })}
               {deHoje.length > 3 && <span className="ilha-mini">{C.maisHoje(deHoje.length - 3)}</span>}
             </>
           )}

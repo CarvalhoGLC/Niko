@@ -422,9 +422,9 @@ function abrirDesacoplado(programa: string, argumentos: string[]): Promise<void>
   });
 }
 
-export async function configuracoes(pagina: "bluetooth" | "wifi" | "bateria") {
-  const gnome = { bluetooth: "bluetooth", wifi: "wifi", bateria: "power" }[pagina];
-  const kde = { bluetooth: "kcm_bluetooth", wifi: "kcm_networkmanagement", bateria: "kcm_powerdevilprofilesconfig" }[pagina];
+export async function configuracoes(pagina: "bluetooth" | "wifi" | "rede" | "bateria") {
+  const gnome = { bluetooth: "bluetooth", wifi: "wifi", rede: "wifi", bateria: "power" }[pagina];
+  const kde = { bluetooth: "kcm_bluetooth", wifi: "kcm_networkmanagement", rede: "kcm_networkmanagement", bateria: "kcm_powerdevilprofilesconfig" }[pagina];
   try {
     await abrirDesacoplado("gnome-control-center", [gnome]);
   } catch {

@@ -1,9 +1,13 @@
 import { create } from "zustand";
 import type { AgenteId } from "../tipos";
 import type { MarcaId } from "../marcas/Marca";
-import { useConfig, type SecaoHoje, type VisaoIlha } from "./configuracoes";
+import { useConfig, type CategoriaDeAviso, type SecaoHoje, type VisaoIlha } from "./configuracoes";
 
 export type EstadoIlha = "escondida" | "compacta" | "expandida";
+
+export function estadoComAviso(estado: EstadoIlha, temAviso: boolean): EstadoIlha {
+  return temAviso && estado === "escondida" ? "compacta" : estado;
+}
 
 export interface Revelacao {
   texto: string;
@@ -11,6 +15,13 @@ export interface Revelacao {
   marca?: MarcaId;
   agente?: AgenteId;
   aba?: VisaoIlha;
+  categoria?: CategoriaDeAviso;
+}
+
+const CATEGORIA_DA_ABA: Partial<Record<VisaoIlha, CategoriaDeAviso>> = { claude: "codigo", conexoes: "conexoes" };
+
+export function avisoLigado(categoria: CategoriaDeAviso | null | undefined): boolean {
+  return !categoria || !(useConfig.getState().avisosDesligados ?? []).includes(categoria);
 }
 
 interface Pendente {
@@ -31,7 +42,7 @@ interface EstadoDaIlha {
   saudar: (versaoNova?: string) => void;
   encerrarSaudacao: () => void;
   recolher: () => void;
-  revelar: (r: Revelacao, ms?: number, importancia?: "alta" | "normal") => void;
+  revelar: (r: Revelacao, ms?: number, importancia?: "alta" | "normal") => boolean;
   dispensarRevelacao: () => void;
   avisarFalha: (texto: string) => void;
   tocar: () => void;
@@ -69,20 +80,22 @@ export const useIlha = create<EstadoDaIlha>()((set, get) => {
     revelar: (r, ms = 4500, importancia = "alta") => {
       const { ilha, naoPerturbe } = useConfig.getState();
       const preferencia = ilha.notificacoes;
-      if (preferencia === "nenhuma") return;
-      if (naoPerturbe && r.aba !== "foco") return;
+      if (preferencia === "nenhuma") return false;
+      if (naoPerturbe && r.aba !== "foco") return false;
+      if (!avisoLigado(r.categoria ?? (r.aba ? CATEGORIA_DA_ABA[r.aba] : undefined))) return false;
       if (importancia === "normal") {
-        if (preferencia !== "todas") return;
-        if (Date.now() - ultimaNormal < INTERVALO_NORMAL) return;
+        if (preferencia !== "todas") return false;
+        if (Date.now() - ultimaNormal < INTERVALO_NORMAL) return false;
         ultimaNormal = Date.now();
       }
-      if (get().estado === "expandida") return;
       const pendente = { r, ms };
       if (get().revelacao) {
-        if (fila.length < 3 && !fila.some((f) => f.r.texto === r.texto)) fila.push(pendente);
-        return;
+        if (fila.length >= 3 || fila.some((f) => f.r.texto === r.texto)) return false;
+        fila.push(pendente);
+        return true;
       }
       mostrar(pendente);
+      return true;
     },
     dispensarRevelacao: () => {
       window.clearTimeout(temporizador);

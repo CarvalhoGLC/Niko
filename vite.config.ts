@@ -1,19 +1,9 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
-import { ponteLocal } from "./servidor/ponte";
+import { ponteLocal } from "./servidor/ponte.ts";
+import { readFileSync } from "node:fs";
 
-const POLITICA_SEGURANCA = [
-  "default-src 'self'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  "media-src 'self'",
-  "connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:47831",
-  "object-src 'none'",
-  "base-uri 'none'",
-  "form-action 'none'",
-].join("; ");
+const POLITICA_SEGURANCA: string = JSON.parse(readFileSync(new URL("./src-tauri/tauri.conf.json", import.meta.url), "utf8")).app.security.csp;
 
 function politicaDeSeguranca(): Plugin {
   return {
@@ -25,6 +15,7 @@ function politicaDeSeguranca(): Plugin {
 }
 
 export default defineConfig({
+  cacheDir: "node_modules/.vite-niko",
   plugins: [react(), politicaDeSeguranca(), ponteLocal()],
   server: { port: 5420, strictPort: false, host: "localhost" },
   preview: { port: 5421, host: "localhost" },

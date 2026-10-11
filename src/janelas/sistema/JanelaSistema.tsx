@@ -1,15 +1,17 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useInterface, type Geometria } from "../../estado/interface";
-import { useConfig } from "../../estado/configuracoes";
+import { useConfig, GRUPO_DA_ROTA } from "../../estado/configuracoes";
 import { Janela, areaUtil } from "../Janela";
 import { BarraLateral } from "./BarraLateral";
-import { PAGINA_ROTA, ICONE_ROTA } from "./rotas";
+import { PAGINA_ROTA } from "./rotas";
+import { numeroDaRota } from "../../componentes/CabecalhoAba";
 import { T } from "../../textos/textos";
 import { AvisosRodape } from "../../componentes/basicos";
 import { tocarSom } from "../../ponte/sons";
 import { NATIVO, janelaAtual } from "../../desktop/desktop";
 import { rotaLigada } from "../../utilitarios/funcoes";
+import { LimiteDeErro } from "../../componentes/LimiteDeErro";
 
 const MINIMO = { w: 960, h: 600 };
 
@@ -52,15 +54,20 @@ export function JanelaSistema() {
   const aoMudarGeometria = useCallback((g: Geometria) => definirSistema({ geometria: g }), [definirSistema]);
 
   const Pagina = PAGINA_ROTA[rota];
-  const Icone = ICONE_ROTA[rota];
   const recolhida = recolhidaManual || largura < 1100;
 
   return (
     <Janela
+      className="estilo-sistema"
       titulo={
-        <span className="linha">
-          <Icone size={14} />
-          {T.rotas[rota]}
+        <span className="migalha">
+          <span className="migalha-app">{T.app.nome}</span>
+          <span className="migalha-ponto" aria-hidden="true" />
+          <span>{T.gruposBarra[GRUPO_DA_ROTA[rota]]}</span>
+          <span className="migalha-barra" aria-hidden="true">/</span>
+          <span className="migalha-atual">
+            {numeroDaRota(rota)} {T.rotas[rota]}
+          </span>
         </span>
       }
       rotuloAcessivel={T.app.nome}
@@ -95,11 +102,13 @@ export function JanelaSistema() {
       <div className="sistema">
         <BarraLateral recolhida={recolhida} />
         <main className="sistema-conteudo" ref={conteudo}>
-          <Suspense fallback={<div className="carregando-pagina" aria-busy="true" />}>
-            <div className="pagina" key={rota}>
-              <Pagina />
-            </div>
-          </Suspense>
+          <LimiteDeErro key={rota} aoVoltar={() => useInterface.getState().irPara("inicio")}>
+            <Suspense fallback={<div className="carregando-pagina" aria-busy="true" />}>
+              <div className="pagina" key={rota}>
+                <Pagina />
+              </div>
+            </Suspense>
+          </LimiteDeErro>
         </main>
       </div>
       <AvisosRodape />

@@ -19,6 +19,9 @@ import type {
 import { gerarId, normalizarTexto } from "../utilitarios/basicos";
 import { deISO, hojeISO, paraISO } from "../utilitarios/datas";
 import { T } from "../textos/textos";
+import { exigir, validarTransacao } from "../utilitarios/validacoes";
+import { COTACOES_PADRAO, emReais, moedaValida, type Cotacoes } from "../utilitarios/dinheiro";
+import type { Moeda } from "../tipos";
 
 export const EU = "eu";
 
@@ -50,6 +53,7 @@ export interface DadosFinancas {
   listas: ListaCompras[];
   precos: Record<string, PrecoHistorico[]>;
   regras: RegraCategoria[];
+  cotacoes: Cotacoes;
 }
 
 interface NovaTransacao extends Omit<Transacao, "id" | "criadaEm"> {
@@ -94,6 +98,7 @@ interface EstadoFinancas extends DadosFinancas {
   categorizar: (descricao: string) => string | undefined;
   importar: (itens: Omit<Transacao, "id" | "criadaEm">[]) => { importados: number; duplicados: number };
   substituir: (dados: Partial<DadosFinancas>) => void;
+  definirCotacoes: (parcial: Partial<Cotacoes>) => void;
 }
 
 function datasDeParcela(data: string, n: number): string {
@@ -117,6 +122,14 @@ export const useFinancas = create<EstadoFinancas>()(
       listas: [],
       precos: {},
       regras: [],
+      cotacoes: COTACOES_PADRAO,
+      definirCotacoes: (parcial) =>
+        set((s) => {
+          const atual = { ...COTACOES_PADRAO, ...s.cotacoes };
+          const proxima = { ...atual, ...parcial };
+          for (const m of ["USD", "EUR"] as const) if (!(Number.isFinite(proxima[m]) && proxima[m] >= 0 && proxima[m] < 1000)) proxima[m] = atual[m];
+          return { cotacoes: proxima };
+        }),
       garantirCategorias: () => {
         if (get().categorias.length > 0) return;
         set({ categorias: CATEGORIAS_PADRAO.map((c) => ({ ...c, id: gerarId() })) });
@@ -159,7 +172,10 @@ export const useFinancas = create<EstadoFinancas>()(
           };
         }),
       lancar: ({ parcelas = 1, ...dados }) => {
-        const total = Math.max(1, Math.min(48, Math.round(parcelas)));
+        validarTransacao(dados, get().contas, get().categorias);
+        exigir(Number.isInteger(parcelas) && parcelas >= 1 && parcelas <= 48, T.validacao.entre(1, 48));
+        exigir(dados.valor >= parcelas, T.validacao.parcelasSemValor);
+        const total = parcelas;
         const grupo = total > 1 ? gerarId() : undefined;
         const criadaEm = new Date().toISOString();
         const base = Math.floor(dados.valor / total);
@@ -177,7 +193,12 @@ export const useFinancas = create<EstadoFinancas>()(
         set((s) => ({ transacoes: [...s.transacoes, ...novas] }));
         return novas;
       },
-      atualizarTransacao: (id, parcial) => set((s) => ({ transacoes: s.transacoes.map((t) => (t.id === id ? { ...t, ...parcial } : t)) })),
+      atualizarTransacao: (id, parcial) => set((s) => ({ transacoes: s.transacoes.map((t) => {
+        if (t.id !== id) return t;
+        const nova = { ...t, ...parcial, id: t.id, criadaEm: t.criadaEm };
+        validarTransacao(nova, s.contas, s.categorias);
+        return nova;
+      }) })),
       excluirTransacao: (id) => {
         const alvo = get().transacoes.find((t) => t.id === id);
         if (!alvo) return [];
@@ -188,8 +209,21 @@ export const useFinancas = create<EstadoFinancas>()(
         set((s) => ({ transacoes: s.transacoes.filter((t) => !ids.has(t.id)) }));
         return removidas;
       },
-      restaurarTransacoes: (itens) => set((s) => ({ transacoes: [...s.transacoes, ...itens] })),
+      restaurarTransacoes: (itens) => set((s) => {
+        const ids = new Set(s.transacoes.map((t) => t.id));
+        const novas: Transacao[] = [];
+        for (const t of itens) {
+          exigir(typeof t.id === "string" && t.id.length > 0);
+          if (ids.has(t.id)) continue;
+          validarTransacao(t, s.contas, s.categorias);
+          ids.add(t.id);
+          novas.push(t);
+        }
+        return { transacoes: [...s.transacoes, ...novas] };
+      }),
       ajustarSaldo: (contaId, saldoReal) => {
+        exigir(Number.isSafeInteger(saldoReal), T.validacao.valorInvalido);
+        exigir(get().contas.some((c) => c.id === contaId), T.validacao.contaObrigatoria);
         const atual = saldoDaConta(get(), contaId);
         const diferenca = saldoReal - atual;
         if (diferenca === 0) return;
@@ -203,7 +237,18 @@ export const useFinancas = create<EstadoFinancas>()(
         });
       },
       criarRecorrente: (dados) => set((s) => ({ recorrentes: [...s.recorrentes, { ...dados, id: gerarId() }] })),
-      atualizarRecorrente: (id, parcial) => set((s) => ({ recorrentes: s.recorrentes.map((r) => (r.id === id ? { ...r, ...parcial } : r)) })),
+      atualizarRecorrente: (id, parcial) =>
+        set((s) => ({
+          recorrentes: s.recorrentes.map((r) => {
+            if (r.id !== id) return r;
+            const novo = { ...r, ...parcial };
+            if (parcial.ativa === true && !r.ativa) {
+              const ultimo = ultimoVencimentoAte(novo, deISO(hojeISO()));
+              if (!r.geradoAte || ultimo > r.geradoAte) novo.geradoAte = ultimo;
+            }
+            return novo;
+          }),
+        })),
       excluirRecorrente: (id) => set((s) => ({ recorrentes: s.recorrentes.filter((r) => r.id !== id) })),
       gerarRecorrentes: () => {
         const hoje = hojeISO();
@@ -332,6 +377,7 @@ export const useFinancas = create<EstadoFinancas>()(
         return get().regras.find((r) => r.contem && alvo.includes(normalizarTexto(r.contem)))?.categoriaId;
       },
       importar: (itens) => {
+        itens.forEach((item) => validarTransacao(item, get().contas, get().categorias));
         const existentes = new Set(get().transacoes.map((t) => `${t.data}|${t.valor}|${normalizarTexto(t.descricao)}`));
         const novas: Transacao[] = [];
         let duplicados = 0;
@@ -362,6 +408,16 @@ function vencimentoAnual(ano: number, mesAnual: number, dia: number): Date {
 export function geradoAteInicial(r: Pick<Recorrente, "dia" | "frequencia" | "mesAnual">, hoje: Date): string | undefined {
   const vencimento = r.frequencia === "anual" && r.mesAnual ? vencimentoAnual(hoje.getFullYear(), r.mesAnual, r.dia) : setDate(hoje, Math.min(r.dia, getDaysInMonth(hoje)));
   return paraISO(vencimento) <= paraISO(hoje) ? paraISO(vencimento) : undefined;
+}
+
+export function ultimoVencimentoAte(r: Pick<Recorrente, "dia" | "frequencia" | "mesAnual">, hoje: Date): string {
+  const desteCiclo = geradoAteInicial(r, hoje);
+  if (desteCiclo) return desteCiclo;
+  const anterior = r.frequencia === "anual" && r.mesAnual ? vencimentoAnual(hoje.getFullYear() - 1, r.mesAnual, r.dia) : (() => {
+    const mes = addMonths(hoje, -1);
+    return setDate(mes, Math.min(r.dia, getDaysInMonth(mes)));
+  })();
+  return paraISO(anterior);
 }
 
 function proximoVencimento(r: Recorrente, geradoAte: string): Date {
@@ -402,9 +458,31 @@ export function saldoDaConta(s: Pick<DadosFinancas, "contas" | "transacoes">, co
       if (t.tipo === "receita") saldo += t.valor;
       else saldo -= t.valor;
     }
-    if (t.tipo === "transferencia" && t.contaDestinoId === contaId) saldo += t.valor;
+    if (t.tipo === "transferencia" && t.contaDestinoId === contaId) saldo += t.valorDestino ?? t.valor;
   }
   return saldo;
+}
+
+export function moedaDaConta(contas: Pick<Conta, "id" | "moeda">[], contaId: string | undefined): Moeda {
+  const m = contas.find((c) => c.id === contaId)?.moeda;
+  return moedaValida(m) ? m : "BRL";
+}
+
+export function cotacoesDe(s: { cotacoes?: Cotacoes }): Cotacoes {
+  return { ...COTACOES_PADRAO, ...s.cotacoes };
+}
+
+/** Valor do lançamento em centavos de real, pela cotação guardada. */
+export function valorEmReais(t: Pick<Transacao, "valor" | "contaId">, s: { contas: Conta[]; cotacoes?: Cotacoes }, valor = t.valor): number {
+  return emReais(valor, moedaDaConta(s.contas, t.contaId), cotacoesDe(s));
+}
+
+export function saldoDaContaEmReais(s: Pick<DadosFinancas, "contas" | "transacoes"> & { cotacoes?: Cotacoes }, contaId: string, ate?: string): number {
+  return emReais(saldoDaConta(s, contaId, ate), moedaDaConta(s.contas, contaId), cotacoesDe(s));
+}
+
+export function contasEmOutraMoeda(contas: Pick<Conta, "moeda" | "arquivada">[]): Moeda[] {
+  return [...new Set(contas.filter((c) => !c.arquivada && c.moeda && c.moeda !== "BRL").map((c) => c.moeda as Moeda))];
 }
 
 export function parteDoUsuario(t: Transacao, divisoes: Divisao[]): number {
@@ -439,11 +517,11 @@ export function receitasDoMes(s: Pick<DadosFinancas, "transacoes">, mes: string)
   return s.transacoes.filter((t) => t.tipo === "receita" && !t.ajuste && t.data.startsWith(mes));
 }
 
-export function gastoPorCategoria(s: Pick<DadosFinancas, "transacoes" | "contas" | "divisoes">, mes: string, modo: "competencia" | "caixa" = "competencia") {
+export function gastoPorCategoria(s: Pick<DadosFinancas, "transacoes" | "contas" | "divisoes"> & { cotacoes?: Cotacoes }, mes: string, modo: "competencia" | "caixa" = "competencia") {
   const mapa = new Map<string, number>();
   for (const t of gastosDoMes(s, mes, modo)) {
     const k = t.categoriaId ?? "";
-    mapa.set(k, (mapa.get(k) ?? 0) + parteDoUsuario(t, s.divisoes));
+    mapa.set(k, (mapa.get(k) ?? 0) + valorEmReais(t, s, parteDoUsuario(t, s.divisoes)));
   }
   return mapa;
 }

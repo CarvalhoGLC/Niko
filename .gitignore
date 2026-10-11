@@ -17,7 +17,21 @@ PENDENCIAS.md
 IDEIAS.md
 
 # Scripts e testes
-scripts/
+scripts/*
+!scripts/validacoes.test.mjs
+!scripts/escritorio.test.mjs
+!scripts/personalizacao-agentes.test.mjs
+!scripts/guarda-roupa.test.mjs
+!scripts/conexoes-em-testes.test.mjs
+!scripts/concorrencia.test.mjs
+!scripts/pre-lancamento.test.mjs
+!scripts/assistive.test.mjs
+!scripts/configuracao-vite.test.mjs
+!scripts/github.test.mjs
+!scripts/vite-para-testes.mjs
+!scripts/interface.test.mjs
+!scripts/ilha.test.mjs
+!scripts/testar.mjs
 testes/
 
 # Vídeo e material de divulgação

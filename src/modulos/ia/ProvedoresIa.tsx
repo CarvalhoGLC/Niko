@@ -5,7 +5,7 @@ import { T } from "../../textos/textos";
 export default function ProvedoresIa() {
   return (
     <>
-      <CabecalhoAba titulo={T.rotas.ia} subtitulo={T.provedoresIa.subtitulo} agente="operador" />
+      <CabecalhoAba titulo={T.rotas.ia} subtitulo={T.provedoresIa.subtitulo} />
       <SecaoIa />
     </>
   );

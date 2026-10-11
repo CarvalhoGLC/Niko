@@ -63,6 +63,26 @@ function WifiAtual {
   return $atual
 }
 
+$script:gerenteDeRede = $null
+function Conexao {
+  $cabo = $false
+  try {
+    foreach ($i in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+      if ($i.OperationalStatus -ne 'Up') { continue }
+      if (@('Ethernet', 'GigabitEthernet', 'FastEthernetT', 'FastEthernetFx', 'Ethernet3Megabit') -notcontains [string]$i.NetworkInterfaceType) { continue }
+      if ($i.Description -match 'Virtual|VPN|TAP|Hyper-V|VMware|VirtualBox|Loopback|Bluetooth|Radmin|Hamachi|ZeroTier|Tailscale|WireGuard|Npcap') { continue }
+      $saidas = @($i.GetIPProperties().GatewayAddresses | Where-Object { $_.Address.AddressFamily -eq 'InterNetwork' -and $_.Address.ToString() -ne '0.0.0.0' })
+      if ($saidas.Count -gt 0) { $cabo = $true; break }
+    }
+  } catch {}
+  $internet = $null
+  try {
+    if (-not $script:gerenteDeRede) { $script:gerenteDeRede = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]'DCB00C01-570F-4A9B-8D69-199FDBA5723B')) }
+    $internet = [bool]$script:gerenteDeRede.IsConnectedToInternet
+  } catch {}
+  return @{ cabo = $cabo; internet = $internet }
+}
+
 function Perfis {
   $nomes = @()
   foreach ($l in (netsh wlan show profiles 2>$null)) { if ($l -match '(Perfis de Usu|Perfil de Usu|User Profile)[^:]*:\s*(.+)$') { $nomes += $Matches[2].Trim() } }
@@ -102,7 +122,7 @@ switch ($entrada.acao) {
     @{ notebook = $notebook; bateria = [bool]$b } | ConvertTo-Json -Compress
   }
   'estado' {
-    @{ bateria = Bateria; brilho = Brilho; wifi = WifiAtual; radios = EstadoRadios } | ConvertTo-Json -Compress -Depth 4
+    @{ bateria = Bateria; brilho = Brilho; wifi = WifiAtual; radios = EstadoRadios; conexao = Conexao } | ConvertTo-Json -Compress -Depth 4
   }
   'redes' {
     $conhecidas = Perfis
@@ -207,7 +227,7 @@ switch ($entrada.acao) {
     } | ConvertTo-Json -Compress -Depth 5
   }
   'configuracoes' {
-    $alvo = switch ([string]$entrada.pagina) { 'bluetooth' { 'ms-settings:bluetooth' } 'wifi' { 'ms-settings:network-wifi' } default { 'ms-settings:batterysaver' } }
+    $alvo = switch ([string]$entrada.pagina) { 'bluetooth' { 'ms-settings:bluetooth' } 'wifi' { 'ms-settings:network-wifi' } 'rede' { 'ms-settings:network-status' } default { 'ms-settings:batterysaver' } }
     Start-Process $alvo
     @{ ok = $true } | ConvertTo-Json -Compress
   }
@@ -323,7 +343,7 @@ export const lerComputador = () => {
   return computadorEmCache.dados;
 };
 export const abrirConfiguracoesWindows = (dados: Record<string, unknown>) => {
-  const pagina = dados.pagina === "bluetooth" || dados.pagina === "wifi" ? dados.pagina : "bateria";
+  const pagina = dados.pagina === "bluetooth" || dados.pagina === "wifi" || dados.pagina === "rede" ? dados.pagina : "bateria";
   if (process.platform === "linux") return linux.configuracoes(pagina);
   return executar({ acao: "configuracoes", pagina });
 };

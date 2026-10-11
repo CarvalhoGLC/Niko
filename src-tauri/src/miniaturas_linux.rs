@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use tauri::AppHandle;
+use tauri::WebviewWindow;
 
 #[allow(dead_code)]
 #[derive(Deserialize)]
@@ -15,4 +15,4 @@ pub struct Miniatura {
 pub struct Miniaturas;
 
 #[tauri::command]
-pub fn miniaturas_janelas(_app: AppHandle, _itens: Vec<Miniatura>, _estado: tauri::State<Miniaturas>) {}
+pub fn miniaturas_janelas(_window: WebviewWindow, _itens: Vec<Miniatura>, _estado: tauri::State<Miniaturas>) {}

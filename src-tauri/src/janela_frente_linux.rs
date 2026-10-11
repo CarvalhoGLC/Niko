@@ -1,9 +1,9 @@
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, WebviewWindow};
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
-enum TipoDaFrente {
+pub enum TipoDaFrente {
     #[default]
     AreaDeTrabalho,
 }
@@ -18,6 +18,6 @@ pub struct EstadoDaFrente {
 }
 
 #[tauri::command]
-pub fn frente_cobre_tela(_app: AppHandle) -> EstadoDaFrente {
+pub fn frente_cobre_tela(_app: AppHandle, _window: WebviewWindow) -> EstadoDaFrente {
     EstadoDaFrente::default()
 }

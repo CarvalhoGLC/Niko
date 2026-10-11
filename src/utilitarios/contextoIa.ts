@@ -1,6 +1,6 @@
 import { useRotina, tarefasDoDia, habitoCumprido } from "../estado/rotina";
 import { useEstudos, revisoesParaHoje } from "../estado/estudos";
-import { useFinancas, gastosDoMes, parteDoUsuario } from "../estado/financas";
+import { useFinancas, gastosDoMes, parteDoUsuario, valorEmReais } from "../estado/financas";
 import { useComunicacao } from "../estado/comunicacao";
 import { useConfig } from "../estado/configuracoes";
 import { usePomodoro } from "../estado/pomodoro";
@@ -11,6 +11,8 @@ import { somar } from "./basicos";
 import { T } from "../textos/textos";
 import type { AgenteId } from "../tipos";
 import { funcaoDoComando, funcaoLigada, regraDasFuncoesParaIa } from "./funcoes";
+import { personaValida } from "../personagens/personalizacao";
+import type { MensagemPonteIa } from "../ponte/ponteLocal";
 
 function comandosSugeridos(): string {
   return ["tarefa", "gasto", "lembrete", "compra"]
@@ -28,7 +30,7 @@ export function resumoPorAgente(): Record<AgenteId, string> {
   const habitos = rotina.habitos.filter((h) => !h.arquivado && !habitoCumprido(h, rotina.registros[hoje]?.[h.id]));
   const revisoes = revisoesParaHoje(estudos);
   const prova = estudos.datas.filter((d) => !d.concluida && d.data >= hoje).sort((a, b) => a.data.localeCompare(b.data))[0];
-  const gasto = somar(gastosDoMes(fin, hoje.slice(0, 7)), (t) => parteDoUsuario(t, fin.divisoes));
+  const gasto = somar(gastosDoMes(fin, hoje.slice(0, 7)), (t) => valorEmReais(t, fin, parteDoUsuario(t, fin.divisoes)));
   const alertas = useAgentes.getState().alertas;
   const falha = alertas.find((a) => a.agenteId === "operador");
   const falhaConexao = alertas.find((a) => a.agenteId === "java" && a.servico);
@@ -65,10 +67,15 @@ export function contextoParaIa(): string {
     `Fatos que o usuário pediu para lembrar:\n${memoria.join("\n") || "- nenhum"}`,
   ];
   if (!cfg.nuncaFinanceiro && funcaoLigada("financas")) {
-    const gasto = somar(gastosDoMes(fin, hoje.slice(0, 7)), (t) => parteDoUsuario(t, fin.divisoes));
+    const gasto = somar(gastosDoMes(fin, hoje.slice(0, 7)), (t) => valorEmReais(t, fin, parteDoUsuario(t, fin.divisoes)));
     linhas.push(`Gasto do mês até agora: ${formatarDinheiro(gasto)}.`);
   }
   return linhas.join("\n\n");
+}
+
+export function preferenciasDoAgente(agente: AgenteId): MensagemPonteIa | null {
+  const persona = personaValida(useConfig.getState().agentes.personas[agente]);
+  return persona ? { papel: "usuario", texto: JSON.stringify({ preferenciasDeConversa: persona }) } : null;
 }
 
 export function promptDoAgente(agente: AgenteId, apenasAnalise = false): string {
@@ -78,6 +85,7 @@ export function promptDoAgente(agente: AgenteId, apenasAnalise = false): string 
   return [
     `Você é ${nomes[agente]}, ${cargos[agente]} no Niko, um app pessoal do usuário para rotina, estudos, finanças e projetos. Sua área: ${T.agentes.areas[agente]}.`,
     `Responda somente como ${nomes[agente]}. Não escreva nomes seguidos de dois pontos no início da resposta, não encene outros agentes e não atribua suas respostas a um colega. O Niko identifica o autor na interface.`,
+    T.agentes.personalizacao.regraPersona,
     ...T.chat.confianca.regras,
     `Colegas do time:\n${colegas}`,
     "Regras:",

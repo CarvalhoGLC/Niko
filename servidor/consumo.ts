@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, existsSync, type Dirent } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
+import { usoPelaStatus } from "./statusClaude.ts";
 
 export interface JanelaUso {
   id: string;
@@ -66,8 +67,11 @@ function porcentagem(v: unknown): number | null {
   return Math.max(0, Math.min(100, n));
 }
 
-async function lerClaude(): Promise<UsoFerramenta> {
+async function lerClaude(soOficial: boolean): Promise<UsoFerramenta> {
   const base: UsoFerramenta = { id: "claude", nome: "Claude Code", situacao: "ausente", janelas: [] };
+  const pelaStatus = usoPelaStatus();
+  if (pelaStatus) return { ...base, situacao: "ok", nota: "status_line", janelas: pelaStatus.map((j) => ({ id: j.id, rotulo: j.id, usado: j.usado, reiniciaEm: j.reiniciaEm })) };
+  if (soOficial) return base;
   const perfis = perfisClaude();
   if (perfis.length === 0) return base;
   for (const perfil of perfis) {
@@ -128,8 +132,8 @@ async function lerCodex(): Promise<UsoFerramenta> {
   }
 }
 
-async function arquivoMaisRecente(pasta: string, profundidade = 2): Promise<{ caminho: string; modificado: number } | null> {
-  let melhor: { caminho: string; modificado: number } | null = null;
+async function arquivoMaisRecente(pasta: string, profundidade = 2): Promise<{ caminho: string; modificado: number; tamanho: number } | null> {
+  let melhor: { caminho: string; modificado: number; tamanho: number } | null = null;
   const visitar = async (dir: string, nivel: number): Promise<void> => {
     let itens: Dirent[] = [];
     try {
@@ -146,7 +150,7 @@ async function arquivoMaisRecente(pasta: string, profundidade = 2): Promise<{ ca
       if (!item.name.endsWith(".jsonl")) continue;
       try {
         const info = await stat(caminho);
-        if (!melhor || info.mtimeMs > melhor.modificado) melhor = { caminho, modificado: info.mtimeMs };
+        if (!melhor || info.mtimeMs > melhor.modificado) melhor = { caminho, modificado: info.mtimeMs, tamanho: info.size };
       } catch {
         continue;
       }
@@ -169,9 +173,15 @@ async function lerFinal(caminho: string, limite = 8 * 1024 * 1024): Promise<stri
   }
 }
 
+let ultimaSessaoLida: { caminho: string; modificado: number; tamanho: number; sessao: SessaoAtual } | null = null;
+
 async function lerSessaoAtual(): Promise<SessaoAtual | null> {
   const recente = await arquivoMaisRecente(join(homedir(), ".claude", "projects"));
-  if (!recente) return null;
+  if (!recente) {
+    ultimaSessaoLida = null;
+    return null;
+  }
+  if (ultimaSessaoLida && ultimaSessaoLida.caminho === recente.caminho && ultimaSessaoLida.modificado === recente.modificado && ultimaSessaoLida.tamanho === recente.tamanho) return { ...ultimaSessaoLida.sessao };
   const sessao: SessaoAtual = {
     projeto: basename(join(recente.caminho, "..")).replace(/^[A-Za-z]--/, "").replace(/-/g, "\\"),
     arquivo: basename(recente.caminho),
@@ -210,7 +220,14 @@ async function lerSessaoAtual(): Promise<SessaoAtual | null> {
     sessao.cacheCriado += uso.cache_creation_input_tokens ?? 0;
     sessao.cacheLido += uso.cache_read_input_tokens ?? 0;
   }
+  ultimaSessaoLida = { ...recente, sessao: { ...sessao } };
   return sessao;
+}
+
+export function usoOficial(): Consumo {
+  const claude = usoPelaStatus();
+  const ferramentas: UsoFerramenta[] = claude ? [{ id: "claude", nome: "Claude Code", situacao: "ok", nota: "status_line", janelas: claude.map((j) => ({ id: j.id, rotulo: j.id, usado: j.usado, reiniciaEm: j.reiniciaEm })) }] : [];
+  return { atualizadoEm: new Date().toISOString(), ferramentas, sessao: null };
 }
 
 let leituraEmAndamento: Promise<Consumo> | null = null;
@@ -226,7 +243,7 @@ export function lerConsumo(forcar = false): Promise<Consumo> {
 }
 
 async function calcularConsumo(): Promise<Consumo> {
-  const [claude, codex] = await Promise.all([lerClaude(), lerCodex()]);
+  const [claude, codex] = await Promise.all([lerClaude(false), lerCodex()]);
   let sessao: SessaoAtual | null = null;
   try {
     sessao = await lerSessaoAtual();

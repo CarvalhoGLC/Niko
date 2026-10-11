@@ -13,7 +13,7 @@ import { useControleRapido, agruparSessoes } from "../../../estado/controleRapid
 import { controle, sistema, type AcaoDeEnergia, type AlvoDeAudio, type EstadoSistema, type FerramentaWindows, type RedeWifi, type SessaoDeAudio } from "../../../ponte/ponteLocal";
 import { tocarSom } from "../../../ponte/sons";
 import { T } from "../../../textos/textos";
-import { IconeDeSinal, IconeDeVolume, IconeDeWifi, wifiLigado as estaComWifiLigado } from "./IconesDeStatus";
+import { IconeDeRede, IconeDeSinal, IconeDeVolume, IconeDeWifi, situacaoDaRede, wifiLigado as estaComWifiLigado } from "./IconesDeStatus";
 import { ListaDeBluetooth } from "./ListaDeBluetooth";
 
 const B = T.ilha.barra;
@@ -257,7 +257,7 @@ function Conexoes() {
   const wifiLigado = estaComWifiLigado(rede);
   const btLigado = rede.radios.Bluetooth ?? false;
   const temBluetooth = rede.radios.Bluetooth !== undefined;
-  if (!rede.wifi.existe && !temBluetooth) return null;
+  const situacao = situacaoDaRede(rede);
 
   const alternarRadio = async (tipo: "WiFi" | "Bluetooth", ligado: boolean) => {
     setOcupado(tipo);
@@ -275,13 +275,24 @@ function Conexoes() {
   return (
     <>
       <div className="ilha-rapido-conexoes">
+        {!rede.wifi.existe && (
+          <div className="ilha-rapido-conexao" data-ligado={situacao === "cabo" || undefined}>
+            <button type="button" className="ilha-rapido-conexao-principal" title={S.abrirWindows} onClick={() => void sistema.configuracoes("rede")}>
+              <IconeDeRede rede={rede} tamanho={15} />
+              <span className="ilha-rapido-conexao-texto">
+                <b>{S.rede}</b>
+                <span className="cortar">{situacao === "cabo" ? S.cabo : situacao === "semInternet" ? S.semInternet : S.semConexao}</span>
+              </span>
+            </button>
+          </div>
+        )}
         {rede.wifi.existe && (
           <div className="ilha-rapido-conexao" data-ligado={wifiLigado || undefined}>
             <button type="button" className="ilha-rapido-conexao-principal" aria-pressed={wifiLigado} disabled={ocupado === "WiFi"} onClick={() => void alternarRadio("WiFi", !wifiLigado)}>
-              <IconeDeWifi rede={rede} tamanho={15} />
+              {situacao === "semInternet" ? <IconeDeRede rede={rede} tamanho={15} /> : <IconeDeWifi rede={rede} tamanho={15} />}
               <span className="ilha-rapido-conexao-texto">
                 <b>{S.wifi}</b>
-                <span className="cortar">{!wifiLigado ? S.desligado : rede.wifi.conectado ? rede.wifi.ssid : S.semRede}</span>
+                <span className="cortar">{!wifiLigado ? S.desligado : situacao === "cabo" ? S.cabo : situacao === "semInternet" ? S.semInternet : rede.wifi.conectado ? rede.wifi.ssid : S.semRede}</span>
               </span>
             </button>
             <button

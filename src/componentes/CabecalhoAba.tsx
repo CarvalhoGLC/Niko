@@ -1,29 +1,36 @@
 import type { ReactNode } from "react";
-import type { AgenteId } from "../tipos";
-import { Personagem } from "../personagens/Personagem";
+import { useInterface } from "../estado/interface";
+import { GRUPO_DA_ROTA } from "../estado/configuracoes";
+import { T } from "../textos/textos";
+import type { Rota } from "../tipos";
+
+export const ORDEM_DAS_ROTAS = Object.keys(T.rotas) as Rota[];
+
+export function numeroDaRota(rota: Rota) {
+  return String(ORDEM_DAS_ROTAS.indexOf(rota) + 1).padStart(2, "0");
+}
 
 interface Props {
   rotulo?: string;
-  titulo: string;
-  subtitulo?: string;
+  titulo: ReactNode;
+  subtitulo?: ReactNode;
   acoes?: ReactNode;
-  agente?: AgenteId;
 }
 
-export function CabecalhoAba({ rotulo, titulo, subtitulo, acoes, agente }: Props) {
+export function CabecalhoAba({ rotulo, titulo, subtitulo, acoes }: Props) {
+  const rota = useInterface((s) => s.rota);
   return (
     <header className="cabecalho-aba">
       <div className="cabecalho-aba-texto">
-        {rotulo && <span className="rotulo-pequeno">{rotulo}</span>}
+        <span className="rotulo-pequeno cabecalho-aba-rotulo">
+          {numeroDaRota(rota)}
+          <span className="cabecalho-aba-traco" aria-hidden="true" />
+          {rotulo ?? T.gruposBarra[GRUPO_DA_ROTA[rota]]}
+        </span>
         <h1 className="titulo-pagina">{titulo}</h1>
-        {subtitulo && <p className="texto-2">{subtitulo}</p>}
-        {acoes && <div className="cabecalho-aba-acoes">{acoes}</div>}
+        {subtitulo && <p className="cabecalho-aba-sub">{subtitulo}</p>}
       </div>
-      {agente && (
-        <div className="cabecalho-aba-ilustracao">
-          <Personagem agente={agente} tamanho={84} />
-        </div>
-      )}
+      {acoes && <div className="cabecalho-aba-acoes">{acoes}</div>}
     </header>
   );
 }

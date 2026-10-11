@@ -1,9 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { conexoesPonte, type DadosServico } from "../../ponte/conexoesReais";
 import { formatarDinheiro } from "../../utilitarios/dinheiro";
-import { horarioRelativo } from "../../utilitarios/datas";
+import { formatar, horarioRelativo } from "../../utilitarios/datas";
 import { T } from "../../textos/textos";
 import type { ServicoId } from "../../tipos";
+import { ContribuicoesGithub } from "../../modulos/conexoes/ContribuicoesGithub";
+import { CommitsGithub } from "../../modulos/conexoes/CommitsGithub";
+import { resumirContribuicoesGithub } from "../../utilitarios/contribuicoesGithub";
 
 const M = T.janelaConexao.metricas;
 const E = T.janelaConexao.estados;
@@ -59,11 +62,8 @@ function mil(n: number) {
   return n.toLocaleString("pt-BR", { notation: n >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 });
 }
 
-function quantos(lista: unknown[]) {
-  return lista.length;
-}
 
-function montarResumo(servico: ServicoId, dados: DadosServico[ServicoId]): Resumo {
+export function montarResumo(servico: ServicoId, dados: DadosServico[ServicoId]): Resumo {
   switch (servico) {
     case "stripe": {
       const d = dados as DadosServico["stripe"];
@@ -87,11 +87,10 @@ function montarResumo(servico: ServicoId, dados: DadosServico[ServicoId]): Resum
     }
     case "github": {
       const d = dados as DadosServico["github"];
-      const desde = Date.now() - 7 * 86400000;
-      const commits = Object.entries(d.commitsPorDia ?? {}).filter(([dia]) => new Date(`${dia}T12:00:00`).getTime() >= desde).reduce((a, [, n]) => a + n, 0);
+      const contribuicoes = d.contribuicoes ? resumirContribuicoesGithub(d.contribuicoes).ultimos7dias : null;
       const falhas = d.actions.filter((a) => a.status === "falhou").length;
       const linhas: Linha[] = [
-        ...d.prs.slice(0, 3).map((p) => ({ chave: `pr-${p.repo}-${p.numero}`, principal: `#${p.numero} ${p.titulo}`, secundario: p.repo, estado: p.revisao, quando: p.data })),
+        ...d.prs.slice(0, 3).map((p) => ({ chave: `pr-${p.repo}-${p.numero}`, principal: `#${p.numero} ${p.titulo}`, secundario: p.repo, estado: p.tipo === "revisar" ? "revisar" : p.ci === "falhou" || p.ci === "rodando" ? p.ci : p.revisao, quando: p.data })),
         ...d.actions.slice(0, 6 - Math.min(3, d.prs.length)).map((a) => ({ chave: `ac-${a.repo}-${a.workflow}-${a.data}`, principal: a.workflow, secundario: `${a.repo} . ${a.branch}`, estado: a.status, quando: a.data })),
       ];
       return {
@@ -99,9 +98,9 @@ function montarResumo(servico: ServicoId, dados: DadosServico[ServicoId]): Resum
           { rotulo: M.prsAbertos, valor: d.prs.length },
           { rotulo: M.issuesAbertas, valor: d.issues.length },
           { rotulo: M.falhasActions, valor: falhas, tom: falhas ? "erro" : "" },
-          { rotulo: I.commits7d, valor: commits },
+          { rotulo: I.contribuicoes7d, valor: contribuicoes === null ? "-" : mil(contribuicoes) },
         ],
-        tituloDaLista: d.prs.length ? I.prsEActions : I.actionsRecentes,
+        tituloDaLista: d.prs.length ? I.prsEActions : d.actions.length ? I.actionsRecentes : T.janelaConexao.abas.github.repositorios,
         linhas: linhas.length ? linhas : d.repositorios.slice(0, 6).map((r) => ({ chave: r.nome, principal: r.nome, secundario: r.linguagem, quando: r.atualizado })),
       };
     }
@@ -183,17 +182,21 @@ function montarResumo(servico: ServicoId, dados: DadosServico[ServicoId]): Resum
         linhas: d.execucoes.slice(0, 6).map((e) => ({ chave: e.id, principal: e.workflow, secundario: T.janelaConexao.milissegundos(e.duracao), estado: e.status, quando: e.data })),
       };
     }
-    case "gmail": {
-      const d = dados as DadosServico["gmail"];
+    case "google": {
+      const d = dados as DadosServico["google"];
+      const emails = d.gmail ? (d.gmail.importantes.length ? d.gmail.importantes : d.gmail.recentes) : [];
+      const eventos = d.agenda?.proximos ?? [];
       return {
         numeros: [
-          { rotulo: M.naoLidos, valor: d.naoLidos, tom: d.naoLidos ? "alerta" : "" },
-          { rotulo: M.importantes, valor: d.importantes.length },
-          { rotulo: M.totalEmails, valor: mil(d.total) },
-          { rotulo: I.recentes, valor: quantos(d.recentes) },
+          { rotulo: M.naoLidos, valor: d.gmail?.naoLidos ?? "-", tom: d.gmail?.naoLidos ? "alerta" : "" },
+          { rotulo: M.hoje, valor: d.agenda?.hoje ?? "-", tom: d.agenda?.hoje ? "sucesso" : "" },
+          { rotulo: M.tarefasAbertas, valor: d.tarefas?.length ?? "-" },
+          { rotulo: M.arquivosRecentes, valor: d.drive?.length ?? "-" },
         ],
-        tituloDaLista: d.importantes.length ? M.importantes : I.recentes,
-        linhas: (d.importantes.length ? d.importantes : d.recentes).slice(0, 6).map((e) => ({ chave: e.id, principal: e.assunto, secundario: e.de, estado: e.naoLido ? "pendente" : "", quando: e.data })),
+        tituloDaLista: emails.length ? (d.gmail?.importantes.length ? M.importantes : I.recentes) : M.proximos,
+        linhas: emails.length
+          ? emails.slice(0, 6).map((e) => ({ chave: e.id, principal: e.assunto, secundario: e.de, estado: e.naoLido ? "pendente" : "", quando: e.data }))
+          : eventos.slice(0, 6).map((e) => ({ chave: e.id, principal: e.titulo, secundario: [formatar(e.data, "EEE, d 'de' MMM"), e.hora].filter(Boolean).join(" . "), estado: "" })),
       };
     }
     case "supabase": {
@@ -226,7 +229,7 @@ function montarResumo(servico: ServicoId, dados: DadosServico[ServicoId]): Resum
         ]),
       };
     }
-    default: {
+    case "cloudflare": {
       const d = dados as DadosServico["cloudflare"];
       const dias = d.metricas.flatMap((m) => m.dias);
       const ameacas = dias.reduce((a, x) => a + x.ameacas, 0);
@@ -246,6 +249,8 @@ function montarResumo(servico: ServicoId, dados: DadosServico[ServicoId]): Resum
         ],
       };
     }
+    default:
+      return { numeros: [], tituloDaLista: "", linhas: [] };
   }
 }
 
@@ -271,7 +276,7 @@ export function ConexaoNaIlha({ servico }: { servico: ServicoId }) {
 
   const resumo = montarResumo(servico, dados);
   return (
-    <>
+    <div className="ilha-rolagem ilha-conexao-conteudo">
       <div className="ilha-conexao-numeros">
         {resumo.numeros.map((n) => (
           <div key={n.rotulo} className="ilha-conexao-numero" data-tom={n.tom || undefined}>
@@ -280,13 +285,15 @@ export function ConexaoNaIlha({ servico }: { servico: ServicoId }) {
           </div>
         ))}
       </div>
+      {servico === "github" && <ContribuicoesGithub calendario={(dados as DadosServico["github"]).contribuicoes} compacto />}
+      {servico === "github" && <CommitsGithub commits={(dados as DadosServico["github"]).commits} compacto />}
       {resumo.aviso && (
         <div className="ilha-conexao-aviso cortar privado" data-tom={resumo.aviso.tom || undefined}>
           {resumo.aviso.texto}
         </div>
       )}
       <span className="ilha-mini">{resumo.tituloDaLista}</span>
-      <div className="ilha-rolagem ilha-conexao-lista">
+      <div className="ilha-conexao-lista">
         {resumo.linhas.length === 0 && <span className="ilha-sub">{I.semItens}</span>}
         {resumo.linhas.map((l) => (
           <div key={l.chave} className="ilha-conexao-linha-item">
@@ -301,6 +308,6 @@ export function ConexaoNaIlha({ servico }: { servico: ServicoId }) {
           </div>
         ))}
       </div>
-    </>
+    </div>
   );
 }

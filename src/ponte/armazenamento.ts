@@ -1,4 +1,5 @@
 import { createJSONStorage, type StateStorage } from "zustand/middleware";
+import { objeto } from "../utilitarios/validacoes";
 
 export const PREFIXO = "niko:";
 const bancoDeTeste = (() => {
@@ -20,15 +21,27 @@ export type ModoArmazenamento = "banco" | "local";
 let modo: ModoArmazenamento = "local";
 const cache = new Map<string, string>();
 const pendentes = new Map<string, string | null>();
+const emEnvio = new Map<string, string | null>();
+let envioEmAndamento: Promise<void> | null = null;
+let ouvintesIniciados = false;
 let temporizador = 0;
-const canal = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("niko-dados") : null;
+const nomeCanal = bancoDeTeste ? `niko-dados-${bancoDeTeste}` : "niko-dados";
+const canal = typeof window !== "undefined" && typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(nomeCanal) : null;
 const ouvintesDeFora = new Set<(chave: string) => void>();
+const preparadoresDeSaida = new Set<() => Promise<void>>();
+let tentativaDeSaida = 0;
+
+export function aoPrepararSaida(fn: () => Promise<void>): () => void {
+  preparadoresDeSaida.add(fn);
+  return () => preparadoresDeSaida.delete(fn);
+}
 const ORIGEM = Math.random().toString(36).slice(2);
-const EVENTO_DADOS = "niko-dados";
+const EVENTO_DADOS = nomeCanal;
 const avisosPendentes = new Map<string, string | null>();
 let temporizadorAviso = 0;
 
 interface MudancaDeDados {
+  banco: string;
   origem: string;
   chave: string;
   valor: string | null;
@@ -39,7 +52,7 @@ function tauriDisponivel(): boolean {
 }
 
 function avisarOutrasJanelas(chave: string, valor: string | null) {
-  canal?.postMessage({ origem: ORIGEM, chave, valor } satisfies MudancaDeDados);
+  canal?.postMessage({ origem: ORIGEM, banco: bancoDeTeste, chave, valor } satisfies MudancaDeDados);
   if (!tauriDisponivel()) return;
   avisosPendentes.set(chave, valor);
   if (temporizadorAviso) return;
@@ -49,20 +62,22 @@ function avisarOutrasJanelas(chave: string, valor: string | null) {
     avisosPendentes.clear();
     try {
       const { emit } = await import("@tauri-apps/api/event");
-      for (const [c, v] of itens) await emit(EVENTO_DADOS, { origem: ORIGEM, chave: c, valor: v } satisfies MudancaDeDados);
+      for (const [c, v] of itens) await emit(EVENTO_DADOS, { origem: ORIGEM, banco: bancoDeTeste, chave: c, valor: v } satisfies MudancaDeDados);
     } catch {
       return;
     }
   }, 120);
 }
 
-function receberDeFora(m: MudancaDeDados) {
-  if (!m || m.origem === ORIGEM || pendentes.has(m.chave)) return;
+function receberDeFora(m: unknown) {
+  if (!objeto(m) || m.banco !== bancoDeTeste || typeof m.origem !== "string" || typeof m.chave !== "string" || !/^niko:[a-z0-9_-]{1,60}$/.test(m.chave) || (m.valor !== null && (typeof m.valor !== "string" || m.valor.length > 20_000_000))) return;
+  if (m.origem === ORIGEM || pendentes.has(m.chave) || emEnvio.has(m.chave)) return;
   const atual = cache.get(m.chave) ?? null;
   if (atual === m.valor) return;
   if (m.valor === null) cache.delete(m.chave);
-  else cache.set(m.chave, m.valor);
-  ouvintesDeFora.forEach((f) => f(m.chave));
+  else cache.set(m.chave, m.valor as string);
+  const chaveRecebida = m.chave;
+  ouvintesDeFora.forEach((f) => f(chaveRecebida));
 }
 
 async function recarregarDaPonte() {
@@ -70,8 +85,9 @@ async function recarregarDaPonte() {
   try {
     const r = await fetch("/ponte/dados", { headers: CABECALHOS });
     if (!r.ok) return;
-    const { dados } = (await r.json()) as { dados: Record<string, string> };
-    for (const [k, v] of Object.entries(dados)) receberDeFora({ origem: "ponte", chave: k, valor: v });
+    const resposta: unknown = await r.json();
+    if (!objeto(resposta) || !objeto(resposta.dados)) return;
+    for (const [k, v] of Object.entries(resposta.dados)) receberDeFora({ origem: "ponte", banco: bancoDeTeste, chave: k, valor: v });
   } catch {
     return;
   }
@@ -85,25 +101,38 @@ function localSeguro<T>(fn: () => T, reserva: T): T {
   }
 }
 
-async function enviarPendentes(manterViva = false) {
+function enviarPendentes(manterViva = false): Promise<void> {
   window.clearTimeout(temporizador);
   temporizador = 0;
-  if (pendentes.size === 0) return;
-  const itens = Object.fromEntries(pendentes);
-  pendentes.clear();
-  try {
-    const r = await fetch("/ponte/dados", { method: "POST", headers: CABECALHOS, body: JSON.stringify({ itens }), keepalive: manterViva && JSON.stringify(itens).length < 60000 });
-    if (!r.ok) throw new Error(`http_${r.status}`);
-  } catch {
-    for (const [k, v] of Object.entries(itens)) if (!pendentes.has(k)) pendentes.set(k, v);
-    window.dispatchEvent(new CustomEvent("niko:armazenamento-falhou"));
-    agendar(4000);
-  }
+  if (envioEmAndamento) return envioEmAndamento;
+  envioEmAndamento = (async () => {
+    while (pendentes.size > 0) {
+      const itens = Object.fromEntries(pendentes);
+      pendentes.clear();
+      for (const [k, v] of Object.entries(itens)) emEnvio.set(k, v);
+      const controle = new AbortController();
+      const limite = window.setTimeout(() => controle.abort(), 8000);
+      try {
+        const corpo = JSON.stringify({ itens });
+        const r = await fetch("/ponte/dados", { method: "POST", headers: CABECALHOS, body: corpo, signal: controle.signal, keepalive: manterViva && new TextEncoder().encode(corpo).length < 60000 });
+        if (!r.ok) throw new Error(`http_${r.status}`);
+      } catch (erro) {
+        for (const [k, v] of Object.entries(itens)) if (!pendentes.has(k) && (cache.get(k) ?? null) === v) pendentes.set(k, v);
+        window.dispatchEvent(new CustomEvent("niko:armazenamento-falhou"));
+        agendar(4000);
+        throw erro;
+      } finally {
+        window.clearTimeout(limite);
+        emEnvio.clear();
+      }
+    }
+  })().finally(() => { envioEmAndamento = null; });
+  return envioEmAndamento;
 }
 
 function agendar(ms = 350) {
   if (temporizador) return;
-  temporizador = window.setTimeout(() => void enviarPendentes(), ms);
+  temporizador = window.setTimeout(() => void enviarPendentes().catch(() => undefined), ms);
 }
 
 const armazenamentoSeguro: StateStorage = {
@@ -154,14 +183,20 @@ function chavesLocais(): string[] {
 }
 
 export async function iniciarArmazenamento(): Promise<ModoArmazenamento> {
+  let limite = 0;
   try {
     const controle = new AbortController();
-    const limite = window.setTimeout(() => controle.abort(), 4000);
+    limite = window.setTimeout(() => controle.abort(), 4000);
     const r = await fetch("/ponte/dados", { headers: CABECALHOS, signal: controle.signal });
     window.clearTimeout(limite);
     if (!r.ok) throw new Error(`http_${r.status}`);
-    const { dados } = (await r.json()) as { dados: Record<string, string> };
-    for (const [k, v] of Object.entries(dados)) cache.set(k, v);
+    const resposta: unknown = await r.json();
+    if (!objeto(resposta) || !objeto(resposta.dados)) throw new Error("dados_invalidos");
+    const dados = resposta.dados;
+    for (const [k, v] of Object.entries(dados)) {
+      if (!/^niko:[a-z0-9_-]{1,60}$/.test(k) || typeof v !== "string" || v.length > 20_000_000) throw new Error("dados_invalidos");
+    }
+    for (const [k, v] of Object.entries(dados)) cache.set(k, v as string);
     modo = "banco";
     const locais = chavesLocais().filter((k) => k !== `${PREFIXO}migrado`);
     const jaMigrou = localSeguro(() => localStorage.getItem(`${PREFIXO}migrado`), null);
@@ -176,20 +211,55 @@ export async function iniciarArmazenamento(): Promise<ModoArmazenamento> {
       await enviarPendentes();
       if (pendentes.size === 0) localSeguro(() => localStorage.setItem(`${PREFIXO}migrado`, new Date().toISOString()), undefined);
     }
-    canal?.addEventListener("message", (e: MessageEvent<MudancaDeDados>) => receberDeFora(e.data));
+    if (ouvintesIniciados) return modo;
     if (tauriDisponivel()) {
       const { listen } = await import("@tauri-apps/api/event");
-      await listen<MudancaDeDados>(EVENTO_DADOS, (e) => receberDeFora(e.payload));
-      await listen("niko://saindo", () => void enviarPendentes());
+      const { invoke } = await import("@tauri-apps/api/core");
+      const desfazer: (() => void)[] = [];
+      try {
+        desfazer.push(await listen<MudancaDeDados>(EVENTO_DADOS, (e) => receberDeFora(e.payload)));
+        desfazer.push(await listen<{ tentativa: number }>("niko://saindo", async (e) => {
+          const tentativa = ++tentativaDeSaida;
+          if (document.body) document.body.inert = true;
+          let sucesso = false;
+          let limiteSaida = 0;
+          try {
+            await Promise.race([
+              Promise.all([...preparadoresDeSaida].map((fn) => fn())),
+              new Promise<never>((_, rejeitar) => { limiteSaida = window.setTimeout(() => rejeitar(new Error("acoes_pendentes")), 8000); }),
+            ]);
+            if (tentativa !== tentativaDeSaida) return;
+            travado = true;
+            await salvarAgora();
+            sucesso = true;
+          } catch { sucesso = false; }
+          finally { window.clearTimeout(limiteSaida); }
+          await invoke("confirmar_salvamento", { tentativa: e.payload.tentativa, sucesso }).catch(() => undefined);
+        }));
+        desfazer.push(await listen("niko://salvar-falhou", () => {
+          tentativaDeSaida++;
+          travado = false;
+          if (document.body) document.body.inert = false;
+          window.dispatchEvent(new CustomEvent("niko:armazenamento-falhou"));
+        }));
+        await invoke("registrar_armazenamento");
+      } catch (erro) {
+        desfazer.forEach((fn) => fn());
+        throw erro;
+      }
     }
+    canal?.addEventListener("message", (e: MessageEvent<MudancaDeDados>) => receberDeFora(e.data));
     window.addEventListener("focus", () => void recarregarDaPonte());
-    window.addEventListener("pagehide", () => void enviarPendentes(true));
+    window.addEventListener("pagehide", () => void enviarPendentes(true).catch(() => undefined));
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") void enviarPendentes(true);
+      if (document.visibilityState === "hidden") void enviarPendentes(true).catch(() => undefined);
       else void recarregarDaPonte();
     });
+    ouvintesIniciados = true;
   } catch {
     modo = "local";
+  } finally {
+    window.clearTimeout(limite);
   }
   return modo;
 }
@@ -204,17 +274,21 @@ let travado = false;
 export async function zerarTudo(apagarChaves: boolean): Promise<void> {
   travado = true;
   window.clearTimeout(temporizador);
-  pendentes.clear();
-  if (modo === "banco") {
-    const r = await fetch("/ponte/dados/zerar", { method: "POST", headers: CABECALHOS, body: JSON.stringify({ confirmacao: "APAGAR", chaves: apagarChaves }) });
-    if (!r.ok) {
-      travado = false;
-      throw new Error(`http_${r.status}`);
+  try {
+    if (modo === "banco") {
+      await salvarAgora();
+      const r = await fetch("/ponte/dados/zerar", { method: "POST", headers: CABECALHOS, signal: AbortSignal.timeout(8000), body: JSON.stringify({ confirmacao: "APAGAR", chaves: apagarChaves }) });
+      if (!r.ok) throw new Error(`http_${r.status}`);
+      cache.clear();
     }
-    cache.clear();
+    pendentes.clear();
+    for (const k of chavesLocais()) if (k !== `${PREFIXO}migrado`) localSeguro(() => localStorage.removeItem(k), undefined);
+    localSeguro(() => localStorage.setItem(`${PREFIXO}migrado`, new Date().toISOString()), undefined);
+  } catch (erro) {
+    travado = false;
+    if (pendentes.size) agendar();
+    throw erro;
   }
-  for (const k of chavesLocais()) if (k !== `${PREFIXO}migrado`) localSeguro(() => localStorage.removeItem(k), undefined);
-  localSeguro(() => localStorage.setItem(`${PREFIXO}migrado`, new Date().toISOString()), undefined);
 }
 
 export function salvarAgora(): Promise<void> {

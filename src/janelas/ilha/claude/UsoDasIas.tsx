@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { lerConsumo, type UsoFerramenta } from "../../../ponte/ponteLocal";
+import { lerConsumo, lerUsoOficial, type UsoFerramenta } from "../../../ponte/ponteLocal";
 import { useConfig } from "../../../estado/configuracoes";
 import { faltaPara, nivelDoUso, rotuloJanela } from "../../../utilitarios/consumo";
 import { Marca, type MarcaId } from "../../../marcas/Marca";
@@ -69,14 +69,10 @@ export function UsoDasIas() {
   const [ferramentas, setFerramentas] = useState<UsoFerramenta[]>([]);
 
   useEffect(() => {
-    if (!lerPlanos) {
-      setFerramentas([]);
-      return;
-    }
     let vivo = true;
     const ler = () => {
       if (document.hidden) return;
-      lerConsumo()
+      (lerPlanos ? lerConsumo() : lerUsoOficial())
         .then((r) => vivo && setFerramentas(r.ferramentas.filter((f) => f.situacao === "ok" && f.janelas.length > 0)))
         .catch(() => undefined);
     };

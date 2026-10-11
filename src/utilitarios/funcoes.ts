@@ -22,10 +22,10 @@ export const PARTES: Record<Funcao, PartesDaFuncao> = {
     abasDaIlha: [],
     secoesDoHoje: ["tarefas", "habitos"],
     blocosDoInicio: ["hoje"],
-    ferramentasIa: ["ler_tarefas", "criar_tarefa", "concluir_tarefa", "ler_habitos", "marcar_habito", "adicionar_compras"],
+    ferramentasIa: ["ler_tarefas", "criar_tarefa", "concluir_tarefa", "ler_habitos", "marcar_habito", "criar_habito", "adicionar_compras"],
     areasDoBanco: ["tarefas", "habitos", "registros_habitos", "journal", "listas_compras"],
     comandos: ["tarefa", "concluir", "habito", "compra"],
-    cartoes: ["tarefa", "concluir", "habito", "compra"],
+    cartoes: ["tarefa", "concluir", "habito", "novoHabito", "compra"],
   },
   estudos: {
     rota: "estudos",
@@ -62,10 +62,10 @@ export const PARTES: Record<Funcao, PartesDaFuncao> = {
     abasDaIlha: [],
     secoesDoHoje: ["agenda"],
     blocosDoInicio: [],
-    ferramentasIa: ["ler_agenda", "criar_evento", "criar_lembrete"],
+    ferramentasIa: ["ler_agenda", "criar_evento", "criar_lembrete", "concluir_evento"],
     areasDoBanco: ["eventos"],
     comandos: ["lembrete", "evento"],
-    cartoes: ["lembrete", "evento"],
+    cartoes: ["lembrete", "evento", "eventoFeito"],
   },
 };
 

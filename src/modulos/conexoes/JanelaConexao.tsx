@@ -4,18 +4,23 @@ import { Janela } from "../../janelas/Janela";
 import { useInterface, type JanelaConexao as EstadoJanela } from "../../estado/interface";
 import { useComunicacao } from "../../estado/comunicacao";
 import { Marca } from "../../marcas/Marca";
-import { Botao, Segmentado, Vazio, AvisoFaixa } from "../../componentes/basicos";
+import { Botao, Vazio, AvisoFaixa, Alternador } from "../../componentes/basicos";
+import { Paginacao, usarPaginacao } from "../../componentes/Paginacao";
 import { T } from "../../textos/textos";
 import { conexoesPonte, PAINEL_OFICIAL, resumoDe, type DadosServico } from "../../ponte/conexoesReais";
 import { formatarDinheiro } from "../../utilitarios/dinheiro";
-import { horarioRelativo } from "../../utilitarios/datas";
+import { formatar, horarioRelativo } from "../../utilitarios/datas";
 import { contem } from "../../utilitarios/basicos";
 import { tocarSom } from "../../ponte/sons";
 import type { ServicoId } from "../../tipos";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { ContribuicoesGithub } from "./ContribuicoesGithub";
+import { CommitsGithub } from "./CommitsGithub";
+import { conexaoEmTestes } from "../../utilitarios/disponibilidadeConexoes";
 
 const MINIMO = { w: 560, h: 420 };
+const INTERVALOS = [30, 60, 120, 300, 600];
 const C = T.janelaConexao.colunas;
 const E = T.janelaConexao.estados;
 
@@ -30,8 +35,10 @@ function Tabela<L>({ linhas, colunas, filtro }: { linhas: L[]; colunas: Coluna<L
   const filtradas = filtro
     ? linhas.filter((l) => colunas.some((c) => (c.texto ? contem(c.texto(l), filtro) : false)))
     : linhas;
+  const paginas = usarPaginacao(filtradas, 15, `${filtro}|${linhas.length}`);
   if (filtradas.length === 0) return <Vazio titulo={T.janelaConexao.semResultados} />;
   return (
+    <>
     <div className="tabela-rolagem">
       <table className="tabela">
         <thead>
@@ -42,7 +49,7 @@ function Tabela<L>({ linhas, colunas, filtro }: { linhas: L[]; colunas: Coluna<L
           </tr>
         </thead>
         <tbody>
-          {filtradas.map((l, i) => (
+          {paginas.visiveis.map((l, i) => (
             <tr key={i}>
               {colunas.map((c) => (
                 <td key={c.titulo} className={c.direita ? "direita numero" : undefined}>{c.render(l)}</td>
@@ -52,6 +59,8 @@ function Tabela<L>({ linhas, colunas, filtro }: { linhas: L[]; colunas: Coluna<L
         </tbody>
       </table>
     </div>
+    <Paginacao {...paginas} />
+    </>
   );
 }
 
@@ -60,7 +69,7 @@ function Estado({ valor }: { valor: string }) {
     ? "sucesso"
     : ["falhou", "erro", "devolvido", "spam", "cancelado"].includes(valor)
       ? "erro"
-      : ["rodando", "construindo", "a_caminho", "pendente", "mudancas", "reembolsado"].includes(valor)
+      : ["rodando", "construindo", "a_caminho", "pendente", "mudancas", "reembolsado", "revisar"].includes(valor)
         ? "alerta"
         : "";
   return <span className={`etiqueta ${tom ? `etiqueta-${tom}` : ""}`}>{E[valor] ?? valor}</span>;
@@ -68,9 +77,9 @@ function Estado({ valor }: { valor: string }) {
 
 function Metrica({ rotulo, valor }: { rotulo: string; valor: ReactNode }) {
   return (
-    <div className="cartao metrica">
-      <span className="rotulo-secao">{rotulo}</span>
+    <div className="conexao-metrica">
       <span className="numero-grande privado">{valor}</span>
+      <span className="conexao-metrica-rotulo">{rotulo}</span>
     </div>
   );
 }
@@ -121,13 +130,13 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
     const M = T.janelaConexao.metricas;
     return (
       <div className="coluna">
-        <div className="grade-metricas">
+        <div className="conexao-metricas">
           <Metrica rotulo={M.disponivel} valor={formatarDinheiro(d.disponivel)} />
           <Metrica rotulo={M.pendente} valor={formatarDinheiro(d.pendente)} />
           <Metrica rotulo={M.pagasHoje} valor={d.cobrancas.filter((c) => c.status === "pago").length} />
           <Metrica rotulo={M.falhas} valor={d.cobrancas.filter((c) => c.status === "falhou").length} />
         </div>
-        <h3 className="rotulo-secao">{T.janelaConexao.ultimas}</h3>
+        <h3 className="conexao-bloco-titulo">{T.janelaConexao.ultimas}</h3>
         {cobrancas}
       </div>
     );
@@ -135,6 +144,8 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
 
   if (servico === "github") {
     const d = dados as DadosServico["github"];
+    if (aba === "contribuicoes") return <ContribuicoesGithub calendario={d.contribuicoes} />;
+    if (aba === "commits") return <CommitsGithub commits={d.commits} filtro={filtro} />;
     const acoes = (
       <Tabela filtro={filtro} linhas={d.actions} colunas={[
         { titulo: C.workflow, render: (l) => l.workflow, texto: (l) => l.workflow },
@@ -157,7 +168,8 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
         { titulo: C.titulo, render: (l) => `#${l.numero} ${l.titulo}`, texto: (l) => l.titulo },
         { titulo: C.repo, render: (l) => l.repo, texto: (l) => l.repo },
         { titulo: C.autor, render: (l) => l.autor, texto: (l) => l.autor },
-        { titulo: C.revisao, render: (l) => <Estado valor={l.revisao} /> },
+        { titulo: C.revisao, render: (l) => <Estado valor={l.tipo === "revisar" ? "revisar" : l.revisao} /> },
+        { titulo: C.ci, render: (l) => (l.tipo === "revisar" || !l.ci ? "" : <Estado valor={l.ci} />) },
         { titulo: C.data, render: (l) => horarioRelativo(l.data), direita: true },
       ]} />;
     if (aba === "issues")
@@ -171,13 +183,15 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
     const M = T.janelaConexao.metricas;
     return (
       <div className="coluna">
-        <div className="grade-metricas">
+        <div className="conexao-metricas">
           <Metrica rotulo={M.prsAbertos} valor={d.prs.length} />
           <Metrica rotulo={M.issuesAbertas} valor={d.issues.length} />
           <Metrica rotulo={M.falhasActions} valor={d.actions.filter((a) => a.status === "falhou").length} />
           <Metrica rotulo={M.repositorios} valor={d.repositorios.length} />
         </div>
-        <h3 className="rotulo-secao">{T.janelaConexao.ultimas}</h3>
+        <ContribuicoesGithub calendario={d.contribuicoes} />
+        <CommitsGithub commits={d.commits} filtro={filtro} />
+        <h3 className="conexao-bloco-titulo">{T.janelaConexao.ultimas}</h3>
         {acoes}
       </div>
     );
@@ -209,13 +223,13 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
     const prontos = d.deploys.filter((x) => x.estado === "pronto");
     return (
       <div className="coluna">
-        <div className="grade-metricas">
+        <div className="conexao-metricas">
           <Metrica rotulo={M.projetos} valor={d.projetos.length} />
           <Metrica rotulo={M.prontos} valor={prontos.length} />
           <Metrica rotulo={M.comErro} valor={d.deploys.filter((x) => x.estado === "erro").length} />
           <Metrica rotulo={M.tempoMedio} valor={T.janelaConexao.segundos(Math.round(prontos.reduce((a, b) => a + b.duracao, 0) / Math.max(1, prontos.length)))} />
         </div>
-        <h3 className="rotulo-secao">{T.janelaConexao.ultimas}</h3>
+        <h3 className="conexao-bloco-titulo">{T.janelaConexao.ultimas}</h3>
         {deploys}
       </div>
     );
@@ -240,13 +254,13 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
     const M = T.janelaConexao.metricas;
     return (
       <div className="coluna">
-        <div className="grade-metricas">
+        <div className="conexao-metricas">
           <Metrica rotulo={M.enviados} valor={d.enviados} />
           <Metrica rotulo={M.entregues} valor={d.entregues} />
           <Metrica rotulo={M.falhas} valor={d.falhas} />
           <Metrica rotulo={M.taxaEntrega} valor={`${Math.round((d.entregues / Math.max(1, d.enviados)) * 100)}%`} />
         </div>
-        <h3 className="rotulo-secao">{T.janelaConexao.ultimas}</h3>
+        <h3 className="conexao-bloco-titulo">{T.janelaConexao.ultimas}</h3>
         {emails}
       </div>
     );
@@ -271,11 +285,11 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
     const M = T.janelaConexao.metricas;
     return (
       <div className="coluna">
-        <div className="grade-metricas">
+        <div className="conexao-metricas">
           <Metrica rotulo={M.paginas} valor={d.paginas.length} />
           <Metrica rotulo={M.bancos} valor={d.bancos.length} />
         </div>
-        <h3 className="rotulo-secao">{T.janelaConexao.ultimas}</h3>
+        <h3 className="conexao-bloco-titulo">{T.janelaConexao.ultimas}</h3>
         {paginas}
       </div>
     );
@@ -302,20 +316,26 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
     const hoje = new Date().toDateString();
     return (
       <div className="coluna">
-        <div className="grade-metricas">
+        <div className="conexao-metricas">
           <Metrica rotulo={M.proximos} valor={d.agendamentos.length} />
           <Metrica rotulo={M.hoje} valor={d.agendamentos.filter((a) => new Date(a.inicio).toDateString() === hoje).length} />
           <Metrica rotulo={M.pendentes} valor={d.agendamentos.filter((a) => a.status === "pendente").length} />
         </div>
-        <h3 className="rotulo-secao">{T.janelaConexao.ultimas}</h3>
+        <h3 className="conexao-bloco-titulo">{T.janelaConexao.ultimas}</h3>
         {agenda}
       </div>
     );
   }
 
-  if (servico === "gmail") {
-    const d = dados as DadosServico["gmail"];
-    const tabela = (linhas: DadosServico["gmail"]["recentes"]) => (
+  if (servico === "google") {
+    const g = dados as DadosServico["google"];
+    const G = T.janelaConexao.google;
+    const M = T.janelaConexao.metricas;
+    const avisos = (Object.keys(G.partes) as (keyof typeof G.partes)[]).flatMap((p) => {
+      const f = g.falhas[p];
+      return f ? [<AvisoFaixa key={p} tipo="alerta">{G.falhas[f](G.partes[p])}</AvisoFaixa>] : [];
+    });
+    const emails = (linhas: NonNullable<DadosServico["google"]["gmail"]>["recentes"]) => (
       <Tabela filtro={filtro} linhas={linhas} colunas={[
         { titulo: C.de, render: (l) => <span className="privado" style={{ fontWeight: l.naoLido ? 600 : 400 }}>{l.de}</span>, texto: (l) => l.de },
         { titulo: C.assunto, render: (l) => <span className="privado" style={{ fontWeight: l.naoLido ? 600 : 400 }}>{l.assunto}</span>, texto: (l) => l.assunto },
@@ -323,19 +343,50 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
         { titulo: C.data, render: (l) => data(l.data), direita: true },
       ]} />
     );
-    if (aba === "importantes") return d.importantes.length ? tabela(d.importantes) : <Vazio titulo={T.janelaConexao.semResultados} />;
-    if (aba === "recentes") return tabela(d.recentes);
-    const M = T.janelaConexao.metricas;
+    const agenda = (linhas: NonNullable<DadosServico["google"]["agenda"]>["proximos"]) => (
+      <Tabela filtro={filtro} linhas={linhas} colunas={[
+        { titulo: C.data, render: (l) => formatar(l.data, "EEE, d 'de' MMM"), texto: (l) => l.data },
+        { titulo: C.inicio, render: (l) => l.hora ?? "" },
+        { titulo: C.titulo, render: (l) => (l.link ? <a className="privado" href={l.link} target="_blank" rel="noopener noreferrer">{l.titulo}</a> : <span className="privado">{l.titulo}</span>), texto: (l) => l.titulo },
+      ]} />
+    );
+    const drive = (linhas: NonNullable<DadosServico["google"]["drive"]>) => (
+      <Tabela filtro={filtro} linhas={linhas} colunas={[
+        { titulo: C.nome, render: (l) => (l.link ? <a className="privado" href={l.link} target="_blank" rel="noopener noreferrer">{l.nome}</a> : <span className="privado">{l.nome}</span>), texto: (l) => l.nome },
+        { titulo: C.tipo, render: (l) => G.tiposArquivo[l.tipo] ?? l.tipo, texto: (l) => G.tiposArquivo[l.tipo] ?? l.tipo },
+        { titulo: C.alterado, render: (l) => data(l.alterado), direita: true },
+      ]} />
+    );
+    const tarefas = (linhas: NonNullable<DadosServico["google"]["tarefas"]>) => (
+      <Tabela filtro={filtro} linhas={linhas} colunas={[
+        { titulo: C.titulo, render: (l) => (l.link ? <a className="privado" href={l.link} target="_blank" rel="noopener noreferrer">{l.titulo}</a> : <span className="privado">{l.titulo}</span>), texto: (l) => l.titulo },
+        { titulo: C.lista, render: (l) => l.lista, texto: (l) => l.lista },
+        { titulo: C.prazo, render: (l) => (l.prazo ? formatar(l.prazo, "d 'de' MMM") : <span className="texto-3">{G.semPrazo}</span>), direita: true },
+      ]} />
+    );
+    const vazio = <Vazio titulo={T.janelaConexao.semResultados} />;
+    if (aba === "importantes") return <div className="coluna">{avisos}{g.gmail?.importantes.length ? emails(g.gmail.importantes) : vazio}</div>;
+    if (aba === "recentes") return <div className="coluna">{avisos}{g.gmail ? emails(g.gmail.recentes) : vazio}</div>;
+    if (aba === "agenda") return <div className="coluna">{avisos}{g.agenda?.proximos.length ? agenda(g.agenda.proximos) : vazio}</div>;
+    if (aba === "drive") return <div className="coluna">{avisos}{g.drive?.length ? drive(g.drive) : vazio}</div>;
+    if (aba === "tarefas") return <div className="coluna">{avisos}{g.tarefas?.length ? tarefas(g.tarefas) : vazio}</div>;
     return (
       <div className="coluna">
-        <div className="grade-metricas">
-          <Metrica rotulo={M.naoLidos} valor={d.naoLidos} />
-          <Metrica rotulo={M.importantes} valor={d.importantes.length} />
-          <Metrica rotulo={M.totalEmails} valor={d.total} />
+        {avisos}
+        <div className="conexao-metricas">
+          <Metrica rotulo={M.naoLidos} valor={g.gmail?.naoLidos ?? "-"} />
+          <Metrica rotulo={M.importantes} valor={g.gmail?.importantes.length ?? "-"} />
+          <Metrica rotulo={M.hoje} valor={g.agenda?.hoje ?? "-"} />
+          <Metrica rotulo={M.tarefasAbertas} valor={g.tarefas?.length ?? "-"} />
+          <Metrica rotulo={M.arquivosRecentes} valor={g.drive?.length ?? "-"} />
         </div>
-        <span className="texto-3 privado">{d.email}</span>
-        <h3 className="rotulo-secao">{T.janelaConexao.ultimas}</h3>
-        {tabela(d.importantes.length ? d.importantes : d.recentes.slice(0, 8))}
+        {g.email && <span className="texto-3 privado">{g.email}</span>}
+        {g.gmail && (
+          <>
+            <h3 className="conexao-bloco-titulo">{T.janelaConexao.ultimas}</h3>
+            {emails(g.gmail.importantes.length ? g.gmail.importantes : g.gmail.recentes.slice(0, 8))}
+          </>
+        )}
       </div>
     );
   }
@@ -379,7 +430,7 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
     const total = d.projetos.reduce((a, p) => a + p.usuarios, 0);
     return (
       <div className="coluna">
-        <div className="grade-metricas">
+        <div className="conexao-metricas">
           <Metrica rotulo={M.projetos} valor={d.projetos.length} />
           <Metrica rotulo={M.usuarios} valor={total} />
           <Metrica rotulo={M.novos7d} valor={d.projetos.reduce((a, p) => a + p.novos7d, 0)} />
@@ -423,7 +474,7 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
     const dias = d.metricas.flatMap((m) => m.dias);
     return (
       <div className="coluna">
-        <div className="grade-metricas">
+        <div className="conexao-metricas">
           <Metrica rotulo={M.dominios} valor={d.zonas.length} />
           <Metrica rotulo={M.requisicoes7d} valor={dias.reduce((a, x) => a + x.requisicoes, 0).toLocaleString("pt-BR")} />
           <Metrica rotulo={M.visitantes7d} valor={dias.reduce((a, x) => a + x.unicos, 0).toLocaleString("pt-BR")} />
@@ -459,12 +510,12 @@ function ConteudoServico({ servico, aba, filtro, dados }: { servico: ServicoId; 
   const total = d.execucoes.length;
   return (
     <div className="coluna">
-      <div className="grade-metricas">
+      <div className="conexao-metricas">
         <Metrica rotulo={M.workflowsAtivos} valor={d.workflows.filter((w) => w.ativo).length} />
         <Metrica rotulo={M.sucesso} valor={`${Math.round((d.execucoes.filter((e) => e.status === "sucesso").length / Math.max(1, total)) * 100)}%`} />
         <Metrica rotulo={M.erros} valor={d.execucoes.filter((e) => e.status === "erro").length} />
       </div>
-      <h3 className="rotulo-secao">{T.janelaConexao.ultimas}</h3>
+      <h3 className="conexao-bloco-titulo">{T.janelaConexao.ultimas}</h3>
       {execucoes}
     </div>
   );
@@ -489,7 +540,9 @@ export function JanelaConexao({ janela }: { janela: EstadoJanela }) {
   const [dados, setDados] = useState<DadosServico[ServicoId] | null>(null);
   const [erro, setErro] = useState("");
   const [buscando, setBuscando] = useState(false);
-  const ativaAgora = Boolean(conexaoAtual?.ligada && conexaoAtual?.chaveSalva);
+  const [confirmandoRemocao, setConfirmandoRemocao] = useState(false);
+  const todas = useComunicacao((s) => s.conexoes);
+  const ativaAgora = !conexaoEmTestes(janela.id) && Boolean(conexaoAtual?.ligada && conexaoAtual?.chaveSalva);
   const buscar = useCallback(
     async (forcar: boolean) => {
       setBuscando(true);
@@ -509,14 +562,32 @@ export function JanelaConexao({ janela }: { janela: EstadoJanela }) {
   useEffect(() => {
     if (ativaAgora) void buscar(false);
   }, [ativaAgora, buscar]);
+  useEffect(() => {
+    if (!janela.minimizada) useComunicacao.getState().marcarFalhasVistas(janela.id);
+  }, [janela.id, janela.minimizada]);
   const aoMudarGeometria = useCallback((g: EstadoJanela["geometria"]) => atualizarJanela(janela.id, { geometria: g }), [atualizarJanela, janela.id]);
 
   if (!conexao || janela.minimizada) return null;
   const servico = T.conexoes.servicos[janela.id];
+  if (conexaoEmTestes(janela.id)) return <Janela className="estilo-sistema" titulo={servico.nome} rotuloAcessivel={servico.nome} geometria={janela.geometria} maximizada={janela.maximizada} z={janela.z} minimo={MINIMO} aoFocar={() => focar(janela.id)} aoFechar={() => fechar(janela.id)} aoMinimizar={() => atualizarJanela(janela.id, { minimizada: true })} aoMaximizar={() => atualizarJanela(janela.id, { maximizada: !janela.maximizada })} aoMudarGeometria={aoMudarGeometria}><AvisoFaixa>{T.conexoes.emTestesDica}</AvisoFaixa></Janela>;
   const ativa = conexao.ligada && conexao.chaveSalva;
+  const status = conexao.status;
+  const tomStatus = status === "conectado" ? "etiqueta-sucesso" : status === "erro" ? "etiqueta-erro" : "";
+  const fixadas = todas.filter((c) => c.fixadaNaIlha).length;
+  const removerChave = async () => {
+    if (!confirmandoRemocao) {
+      setConfirmandoRemocao(true);
+      window.setTimeout(() => setConfirmandoRemocao(false), 3000);
+      return;
+    }
+    setConfirmandoRemocao(false);
+    await conexoesPonte.removerChave(janela.id).catch(() => undefined);
+    atualizarConexao(janela.id, { chaveSalva: false, ligada: false, status: "sem_chave", resumo: "" });
+  };
 
   return (
     <Janela
+      className="estilo-sistema"
       titulo={
         <span className="linha">
           <Marca marca={janela.id} tamanho={14} />
@@ -534,22 +605,22 @@ export function JanelaConexao({ janela }: { janela: EstadoJanela }) {
       aoMaximizar={() => atualizarJanela(janela.id, { maximizada: !janela.maximizada })}
       aoMudarGeometria={aoMudarGeometria}
     >
-      <div className="janela-conexao">
-        <header className="janela-conexao-topo">
-          <div className="janela-conexao-marca">
-            <Marca marca={janela.id} tamanho={26} />
-          </div>
-          <div className="coluna" style={{ gap: 2, minWidth: 0 }}>
-            <h2 className="titulo-secao">{servico.nome}</h2>
-            <span className="texto-2 cortar">
-              {T.conexoes.status[conexao.status]}
-              {" . "}
-              {conexao.ultimaAtualizacao ? T.conexoes.atualizado(horarioRelativo(conexao.ultimaAtualizacao)) : T.conexoes.nunca}
+      <div className="conexao-janela">
+        <header className="conexao-janela-topo">
+          <span className="conexao-janela-logo">
+            <Marca marca={janela.id} tamanho={24} />
+          </span>
+          <span className="conexao-janela-titulo">
+            <span className="conexao-janela-nome">
+              <h2>{servico.nome}</h2>
+              <span className={`etiqueta ${tomStatus}`}>{T.conexoes.status[status]}</span>
             </span>
-          </div>
-          <div className="linha empurrar">
+            <span className="conexao-janela-sub cortar">
+              {servico.descricao} · {conexao.ultimaAtualizacao ? T.conexoes.atualizado(horarioRelativo(conexao.ultimaAtualizacao)) : T.conexoes.nunca}
+            </span>
+          </span>
+          <div className="conexao-janela-acoes">
             <Botao
-              pequeno
               icone={<RefreshCw size={13} />}
               disabled={!ativa || buscando}
               onClick={() => {
@@ -559,14 +630,14 @@ export function JanelaConexao({ janela }: { janela: EstadoJanela }) {
             >
               {T.janelaConexao.atualizar}
             </Botao>
-            <a className="botao botao-secundario botao-pequeno" href={PAINEL_OFICIAL[janela.id]} target="_blank" rel="noopener noreferrer">
+            <a className="botao botao-secundario" href={PAINEL_OFICIAL[janela.id]} target="_blank" rel="noopener noreferrer">
               <ExternalLink size={13} />
               {T.janelaConexao.abrirPainel}
             </a>
-            <Botao pequeno soIcone variante="fantasma" icone={<Settings2 size={14} />} aria-label={T.janelaConexao.configurar} title={T.janelaConexao.configurar} onClick={() => configurarConexao()} />
+            <Botao soIcone icone={<Settings2 size={14} />} aria-label={T.janelaConexao.configurar} title={T.janelaConexao.configurar} onClick={() => configurarConexao()} />
           </div>
         </header>
-        {erro && <AvisoFaixa tipo="erro">{T.conexoes.falhaLeitura(erro)}</AvisoFaixa>}
+        {erro && <div className="conexao-janela-erro"><AvisoFaixa tipo="erro">{T.conexoes.falhaLeitura(erro)}</AvisoFaixa></div>}
         {!ativa ? (
           <Vazio
             icone={<Marca marca={janela.id} tamanho={32} />}
@@ -576,16 +647,52 @@ export function JanelaConexao({ janela }: { janela: EstadoJanela }) {
           />
         ) : (
           <>
-            <div className="linha-entre" style={{ flexWrap: "wrap" }}>
-              <Segmentado rotulo={servico.nome} valor={aba} aoMudar={(v) => { setAba(v); setFiltro(""); }} opcoes={Object.entries(abas).map(([valor, rotulo]) => ({ valor, rotulo }))} />
-              {aba !== "visao" && (
-                <label className="campo-busca">
-                  <Search size={14} />
-                  <input className="campo" value={filtro} maxLength={80} onChange={(e) => setFiltro(e.target.value)} placeholder={T.janelaConexao.buscar} aria-label={T.janelaConexao.buscar} />
-                </label>
-              )}
+            <div className="conexao-abas" role="tablist" aria-label={T.janelaConexao.abasRotulo}>
+              {Object.entries(abas).map(([valor, rotulo]) => (
+                <button key={valor} type="button" role="tab" aria-selected={aba === valor} onClick={() => { setAba(valor); setFiltro(""); }}>{rotulo}</button>
+              ))}
             </div>
-            {dados ? <ConteudoServico servico={janela.id} aba={aba} filtro={filtro} dados={dados} /> : <p className="texto-3">{buscando ? T.conexoes.carregando : ""}</p>}
+            <div className="conexao-janela-corpo">
+              <div className="conexao-janela-principal">
+                {aba !== "visao" && (
+                  <label className="campo-busca conexao-janela-busca">
+                    <Search size={14} />
+                    <input className="campo" value={filtro} maxLength={80} onChange={(e) => setFiltro(e.target.value)} placeholder={T.janelaConexao.buscar} aria-label={T.janelaConexao.buscar} />
+                  </label>
+                )}
+                {dados ? <ConteudoServico servico={janela.id} aba={aba} filtro={filtro} dados={dados} /> : <p className="conexao-janela-carregando">{buscando ? T.conexoes.carregando : ""}</p>}
+              </div>
+              <aside className="conexao-janela-lado">
+                <div className="conexao-lado-cartao">
+                  <span className="conexao-lado-rotulo">{T.conexoes.chave}</span>
+                  <button type="button" className="conexao-chave" title={T.janelaConexao.trocarChave} onClick={() => configurarConexao()}>
+                    <Lock size={12} />
+                    <span className="cortar">{T.janelaConexao.chaveGuardada}</span>
+                    <span className="conexao-chave-trocar">{T.janelaConexao.trocarChave}</span>
+                  </button>
+                  <span className="conexao-lado-dica">{T.conexoes.chaveDica}</span>
+                </div>
+                <div className="conexao-lado-cartao">
+                  <label className="conexao-lado-linha" htmlFor={`cx-int-${janela.id}`}>
+                    {T.conexoes.intervalo}
+                    <select id={`cx-int-${janela.id}`} className="seletor conexao-intervalo" value={conexao.intervalo} onChange={(e) => atualizarConexao(janela.id, { intervalo: Number(e.target.value) })}>
+                      {INTERVALOS.map((s) => <option key={s} value={s}>{T.conexoes.segundos(s)}</option>)}
+                    </select>
+                  </label>
+                  <span className="conexao-lado-linha">
+                    {T.conexoes.fixarNaIlha}
+                    <Alternador ligado={conexao.fixadaNaIlha} rotulo={T.conexoes.fixarNaIlha} desativado={!conexao.fixadaNaIlha && fixadas >= 4} aoMudar={(v) => atualizarConexao(janela.id, { fixadaNaIlha: v })} />
+                  </span>
+                  <span className="conexao-lado-dica">{T.conexoes.limiteIlha}</span>
+                </div>
+                <div className="conexao-lado-botoes">
+                  <button type="button" className="conexao-desligar" onClick={() => atualizarConexao(janela.id, { ligada: false, status: "pausado" })}>{T.conexoes.desligar}</button>
+                  <button type="button" className="conexao-remover" data-confirmando={confirmandoRemocao || undefined} onClick={() => void removerChave()}>
+                    {confirmandoRemocao ? T.janelaConexao.confirmarRemocao : T.conexoes.removerChave}
+                  </button>
+                </div>
+              </aside>
+            </div>
           </>
         )}
       </div>

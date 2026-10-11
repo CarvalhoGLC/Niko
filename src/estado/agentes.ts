@@ -4,7 +4,10 @@ import { armazenamento, chave } from "../ponte/armazenamento";
 import type { AgenteId, Alerta, Atividade, EstadoAgente, Rota, ServicoId } from "../tipos";
 import { gerarId } from "../utilitarios/basicos";
 import { tocarSom, type NomeSom } from "../ponte/sons";
-import { useIlha } from "./ilha";
+import { avisoLigado, useIlha } from "./ilha";
+import type { CategoriaDeAviso } from "./configuracoes";
+
+const CATEGORIA_DA_ROTA: Partial<Record<Rota, CategoriaDeAviso>> = { calendario: "lembretes", journal: "habitos", estudos: "estudos", financas: "financas", conexoes: "conexoes", consumo: "consumo" };
 
 export const AGENTES: AgenteId[] = ["organizador", "tutor", "operador", "java"];
 
@@ -100,8 +103,11 @@ export const useAgentes = create<EstadoAgentes>()(
             relogio: Date.now(),
           }));
           mudarSinal(agente, (x) => x);
-          void tocarSom(som, "avisos");
-          useIlha.getState().revelar({ texto, tipo: "alerta", agente, aba: "avisos" }, urgente ? 6000 : 4200, urgente ? "alta" : "normal");
+          const categoria = rota ? CATEGORIA_DA_ROTA[rota] : undefined;
+          if (avisoLigado(categoria)) {
+            const aceito = useIlha.getState().revelar({ texto, tipo: "alerta", agente, aba: "avisos", categoria }, urgente ? 6000 : 4200, urgente ? "alta" : "normal");
+            if (aceito) void tocarSom(som, "avisos");
+          }
           window.setTimeout(() => set({ relogio: Date.now() }), ALERTA_FRESCO + 200);
           return id;
         },

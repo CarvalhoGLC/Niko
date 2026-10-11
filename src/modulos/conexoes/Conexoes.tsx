@@ -1,17 +1,18 @@
-import { useEffect, useState } from "react";
-import { Maximize2, KeyRound, Pin, PinOff, RefreshCw, TriangleAlert, ShieldCheck, ExternalLink, Plug } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { KeyRound, Pin, PinOff, RefreshCw, TriangleAlert, ShieldCheck, ExternalLink, Play, Pause } from "lucide-react";
 import { CabecalhoAba } from "../../componentes/CabecalhoAba";
-import { Cartao, Botao, Pilulas, AvisoFaixa, Modal, Campo, LinhaAlternador } from "../../componentes/basicos";
+import { Botao, AvisoFaixa, Modal, Campo, LinhaAlternador, Alternador } from "../../componentes/basicos";
 import { Marca } from "../../marcas/Marca";
 import { useComunicacao, SERVICOS, CATEGORIA_SERVICO } from "../../estado/comunicacao";
 import { useInterface } from "../../estado/interface";
 import { useConfig } from "../../estado/configuracoes";
 import { T } from "../../textos/textos";
 import { horarioRelativo } from "../../utilitarios/datas";
-import { conexoesPonte, resumoDe, LINKS_DO_GUIA } from "../../ponte/conexoesReais";
+import { conexoesPonte, resumoDe, LINKS_DO_GUIA, SERVICOS_DO_GOOGLE } from "../../ponte/conexoesReais";
 import { atualizarConexaoAgora } from "../../servicos/servicos";
 import { tocarSom } from "../../ponte/sons";
 import type { ServicoId } from "../../tipos";
+import { conexaoEmTestes } from "../../utilitarios/disponibilidadeConexoes";
 
 type Filtro = keyof typeof T.conexoes.filtros;
 
@@ -51,37 +52,60 @@ function Configurar({ servico, aoFechar }: { servico: ServicoId | null; aoFechar
   const [clienteId, setClienteId] = useState("");
   const [erro, setErro] = useState("");
   const [testando, setTestando] = useState(false);
+  const [loginDisponivel, setLoginDisponivel] = useState(false);
+  const [clienteProprio, setClienteProprio] = useState(false);
+  const [verificandoLogin, setVerificandoLogin] = useState(servico === "google");
+  const salvando = useRef(false);
   useEffect(() => {
+    let ativo = true;
     setChave("");
+    setClienteId("");
     setErro("");
     setUrl("");
+    setLoginDisponivel(false);
+    setClienteProprio(false);
+    setVerificandoLogin(servico === "google");
+    if (servico === "google" && !conexaoEmTestes(servico)) {
+      void conexoesPonte.loginDireto().then((r) => {
+        if (ativo) setLoginDisponivel(r.disponivel === true);
+      }).catch(() => undefined).finally(() => {
+        if (ativo) setVerificandoLogin(false);
+      });
+    }
+    return () => { ativo = false; };
   }, [servico]);
   if (!servico || !conexao) return <Modal aberto={false} titulo="" aoFechar={aoFechar}>{null}</Modal>;
   const nome = T.conexoes.servicos[servico].nome;
+  if (conexaoEmTestes(servico)) return <Modal aberto titulo={nome} aoFechar={aoFechar}><AvisoFaixa>{T.conexoes.emTestesDica}</AvisoFaixa></Modal>;
+  const doGoogle = SERVICOS_DO_GOOGLE.includes(servico);
+  const loginSimples = servico === "google" && loginDisponivel && !clienteProprio;
   const fixadas = conexoes.filter((c) => c.fixadaNaIlha).length;
 
   const salvar = async () => {
-    if (servico === "gmail" ? !/\.apps\.googleusercontent\.com$/.test(clienteId.trim()) : false) {
+    if (salvando.current || verificandoLogin) return;
+    if (doGoogle && !loginSimples && !/\.apps\.googleusercontent\.com$/.test(clienteId.trim())) {
       setErro(T.conexoes.clienteIdInvalido);
       return;
     }
-    if (chave.trim().length < 8) {
+    if (!loginSimples && chave.trim().length < 8) {
       setErro(T.conexoes.chaveCurta);
       return;
     }
+    salvando.current = true;
     setTestando(true);
     setErro("");
     try {
-      await conexoesPonte.salvarChave(servico, chave.trim(), servico === "n8n" ? { url: url.trim() } : servico === "gmail" ? { clienteId: clienteId.trim(), segredo: chave.trim() } : {});
+      await conexoesPonte.salvarChave(servico, loginSimples ? "" : chave.trim(), loginSimples ? {} : servico === "n8n" ? { url: url.trim() } : doGoogle ? { clienteId: clienteId.trim(), segredo: chave.trim() } : {});
       setChave("");
       const dados = await conexoesPonte.ler(servico, true);
       atualizar(servico, { chaveSalva: true, ligada: true, status: "conectado", ultimaAtualizacao: new Date().toISOString(), resumo: resumoDe(servico, dados) });
-      avisar(T.conexoes.chaveSalva);
+      avisar(doGoogle ? T.conexoes.googleConectado : T.conexoes.chaveSalva);
       void tocarSom("approve");
     } catch (e) {
-      setErro(T.conexoes.falhaChave((e as Error).message));
+      setErro(doGoogle ? T.conexoes.falhaLoginGoogle((e as Error).message) : T.conexoes.falhaChave((e as Error).message));
       void tocarSom("error", "avisos");
     } finally {
+      salvando.current = false;
       setTestando(false);
     }
   };
@@ -93,8 +117,8 @@ function Configurar({ servico, aoFechar }: { servico: ServicoId | null; aoFechar
           <span className="linha"><ShieldCheck size={13} />{T.conexoes.permissao}</span>
           <span>{T.conexoes.permissoes[servico]}</span>
         </AvisoFaixa>
-        <GuiaConexao servico={servico} />
-        {servico === "gmail" && (
+        {!loginSimples && !verificandoLogin && <GuiaConexao servico={servico} />}
+        {doGoogle && !loginSimples && !verificandoLogin && (
           <>
             <Campo id="cx-cliente" rotulo={T.conexoes.clienteId} dica={T.conexoes.clienteIdDica}>
               <input id="cx-cliente" className="campo" autoComplete="off" spellCheck={false} value={clienteId} onChange={(e) => setClienteId(e.target.value)} />
@@ -106,7 +130,7 @@ function Configurar({ servico, aoFechar }: { servico: ServicoId | null; aoFechar
             <input id="cx-url" className="campo" type="url" autoComplete="off" spellCheck={false} value={url} onChange={(e) => setUrl(e.target.value)} />
           </Campo>
         )}
-        <Campo id="cx-chave" rotulo={servico === "gmail" ? T.conexoes.segredoCliente : T.conexoes.chave} erro={erro} dica={servico === "gmail" ? T.conexoes.gmailDica : T.conexoes.chaveDica}>
+        {!loginSimples && !verificandoLogin && <Campo id="cx-chave" rotulo={doGoogle ? T.conexoes.segredoCliente : T.conexoes.chave} erro={erro} dica={doGoogle ? T.conexoes.gmailDica : T.conexoes.chaveDica}>
           <input
             id="cx-chave"
             className="campo"
@@ -121,14 +145,16 @@ function Configurar({ servico, aoFechar }: { servico: ServicoId | null; aoFechar
               setErro("");
             }}
           />
-        </Campo>
+        </Campo>}
+        {loginSimples && erro && <AvisoFaixa tipo="erro"><span role="alert">{erro}</span></AvisoFaixa>}
         <div className="linha">
-          <Botao type="submit" variante="primario" icone={<KeyRound size={14} />} disabled={testando || !chave.trim()}>
-            {testando ? (servico === "gmail" ? T.conexoes.aguardandoGoogle : T.conexoes.testando) : servico === "gmail" ? T.conexoes.conectarGoogle : T.conexoes.salvarChave}
+          <Botao type="submit" variante="primario" icone={loginSimples ? <Marca marca="google" tamanho={14} /> : <KeyRound size={14} />} disabled={testando || verificandoLogin || (!loginSimples && !chave.trim())}>
+            {verificandoLogin ? T.conexoes.verificandoLoginGoogle : testando ? (doGoogle ? T.conexoes.aguardandoGoogle : T.conexoes.testando) : loginSimples ? T.conexoes.entrarGoogle : doGoogle ? T.conexoes.conectarGoogle : T.conexoes.salvarChave}
           </Botao>
           {conexao.chaveSalva && (
             <Botao
               variante="perigo"
+              disabled={testando}
               onClick={async () => {
                 await conexoesPonte.removerChave(servico).catch(() => undefined);
                 atualizar(servico, { chaveSalva: false, ligada: false, status: "sem_chave", resumo: "" });
@@ -138,6 +164,11 @@ function Configurar({ servico, aoFechar }: { servico: ServicoId | null; aoFechar
             </Botao>
           )}
         </div>
+        {servico === "google" && loginDisponivel && (
+          <button type="button" className="botao botao-fantasma botao-pequeno" disabled={testando} onClick={() => { setClienteProprio(!clienteProprio); setErro(""); }}>
+            {clienteProprio ? T.conexoes.usarLoginDoNiko : T.conexoes.usarClienteProprio}
+          </button>
+        )}
         <LinhaAlternador
           rotulo={conexao.ligada ? T.conexoes.desligar : T.conexoes.ligar}
           ligado={conexao.ligada}
@@ -185,84 +216,101 @@ export default function Conexoes() {
       <CabecalhoAba
         titulo={T.conexoes.titulo}
         subtitulo={T.conexoes.subtitulo}
-        agente="java"
         acoes={
-          <Botao pequeno variante={pausadas ? "primario" : "secundario"} onClick={() => definir({ pausarConexoes: !pausadas })}>
+          <Botao icone={pausadas ? <Play size={13} /> : <Pause size={13} />} onClick={() => definir({ pausarConexoes: !pausadas })}>
             {pausadas ? T.conexoes.retomarTudo : T.configuracoes.pausarConexoes}
           </Botao>
         }
       />
-      <AvisoFaixa>{T.conexoes.avisoReal}</AvisoFaixa>
-      <Pilulas<Filtro> rotulo={T.conexoes.titulo} valor={filtro} aoMudar={setFiltro} opcoes={(Object.keys(T.conexoes.filtros) as Filtro[]).map((f) => ({ valor: f, rotulo: T.conexoes.filtros[f] }))} />
-      <div className="grade">
+      <section className="conexoes-barra">
+        <div className="conexoes-filtros" role="group" aria-label={T.conexoes.titulo}>
+          {(Object.keys(T.conexoes.filtros) as Filtro[]).map((f) => (
+            <button key={f} type="button" aria-pressed={filtro === f} onClick={() => setFiltro(f)}>{T.conexoes.filtros[f]}</button>
+          ))}
+        </div>
+        <span className="conexoes-aviso">
+          <ShieldCheck size={14} />
+          {T.conexoes.avisoReal}
+        </span>
+      </section>
+      <section className="conexoes-grade">
         {lista.map((id) => {
           const c = conexoes.find((x) => x.id === id)!;
           const servico = T.conexoes.servicos[id];
           const ultimo = eventos.find((e) => e.servico === id);
           const status = pausadas && c.ligada ? "pausado" : c.status;
+          const ativa = c.ligada && c.chaveSalva;
           return (
-            <Cartao key={id} className="col-4 cartao-conexao">
-              <div className="linha" style={{ gap: 12, marginBottom: 12 }}>
-                <div className="janela-conexao-marca" style={{ width: 40, height: 40, flexBasis: 40 }}>
-                  <Marca marca={id} tamanho={20} />
-                </div>
-                <div className="coluna" style={{ gap: 0, minWidth: 0, flex: 1 }}>
+            <article key={id} className="conexao-cartao" data-ativa={ativa ? "sim" : "nao"}>
+              <button
+                type="button"
+                className="conexao-cartao-abrir"
+                aria-label={`${c.chaveSalva ? T.ilha.abrirConexao : T.conexoes.conectar}: ${servico.nome}`}
+                onClick={() => (c.chaveSalva ? abrirJanela(id) : setConfigurando(id))}
+              />
+              <div className="conexao-cartao-topo">
+                <span className="conexao-logo"><Marca marca={id} tamanho={20} /></span>
+                <span className="conexao-cartao-nome">
                   <b>{servico.nome}</b>
-                  <span className="texto-3 cortar" style={{ fontSize: 12 }}>{servico.descricao}</span>
-                </div>
-                <span className={`etiqueta ${status === "conectado" ? "etiqueta-sucesso" : status === "erro" ? "etiqueta-erro" : ""}`}>{T.conexoes.status[status]}</span>
+                  <span>{servico.descricao}</span>
+                </span>
+                <span className="conexao-cartao-interativo">
+                  <Alternador
+                    ligado={c.ligada}
+                    rotulo={c.ligada ? T.conexoes.desligar : T.conexoes.ligar}
+                    desativado={!c.chaveSalva || conexaoEmTestes(id)}
+                    aoMudar={(v) => atualizar(id, { ligada: v, status: v ? "conectado" : "pausado" })}
+                  />
+                </span>
               </div>
-              <div className="coluna" style={{ gap: 4, minHeight: 52 }}>
-                <span className="privado">{c.resumo || T.conexoes.semDados}</span>
-                <span className="texto-3" style={{ fontSize: 11 }}>{c.ultimaAtualizacao ? T.conexoes.atualizado(horarioRelativo(c.ultimaAtualizacao)) : T.conexoes.nunca}</span>
-                {ultimo && (
-                  <span className="linha texto-2 cortar" style={{ fontSize: 12 }}>
-                    {ultimo.tipo === "falha" && <TriangleAlert size={12} color="var(--erro)" />}
-                    {ultimo.texto} . {horarioRelativo(ultimo.data)}
-                  </span>
-                )}
+              <div className="conexao-cartao-resumo">
+                <span className="privado">{conexaoEmTestes(id) ? T.conexoes.emTestesDica : c.resumo || T.conexoes.semDados}</span>
+                <span className={`etiqueta ${status === "conectado" ? "etiqueta-sucesso" : status === "erro" ? "etiqueta-erro" : ""}`}>{conexaoEmTestes(id) ? T.conexoes.emTestes : T.conexoes.status[status]}</span>
               </div>
-              <div className="linha" style={{ marginTop: 12, flexWrap: "wrap" }}>
-                {c.chaveSalva ? (
-                  <>
-                    <Botao pequeno variante="primario" icone={<Maximize2 size={13} />} onClick={() => abrirJanela(id)}>{T.ilha.abrirConexao}</Botao>
-                    <Botao pequeno icone={<KeyRound size={13} />} onClick={() => setConfigurando(id)}>{T.janelaConexao.configurar}</Botao>
-                  </>
-                ) : (
-                  <Botao pequeno variante="primario" icone={<Plug size={13} />} onClick={() => setConfigurando(id)}>{T.conexoes.conectar}</Botao>
-                )}
-                {c.chaveSalva && (
-                  <>
-                    <Botao
-                      pequeno
-                      soIcone
-                      variante="fantasma"
-                      icone={<RefreshCw size={13} />}
-                      aria-label={T.conexoes.atualizarAgora}
-                      title={T.conexoes.atualizarAgora}
-                      onClick={() => {
-                        void tocarSom("search");
-                        void atualizarConexaoAgora(id);
-                      }}
-                    />
-                    <Botao
-                      pequeno
-                      soIcone
-                      variante="fantasma"
-                      icone={c.fixadaNaIlha ? <PinOff size={13} /> : <Pin size={13} />}
-                      aria-label={T.conexoes.fixarNaIlha}
-                      title={T.conexoes.fixarNaIlha}
-                      disabled={!c.fixadaNaIlha && conexoes.filter((x) => x.fixadaNaIlha).length >= 4}
-                      onClick={() => atualizar(id, { fixadaNaIlha: !c.fixadaNaIlha })}
-                    />
-                  </>
-                )}
+              {ultimo && !conexaoEmTestes(id) && (
+                <span className="conexao-cartao-evento" data-falha={ultimo.tipo === "falha" || undefined}>
+                  {ultimo.tipo === "falha" && <TriangleAlert size={12} />}
+                  <span className="cortar">{ultimo.texto} · {horarioRelativo(ultimo.data)}</span>
+                </span>
+              )}
+              <div className="conexao-cartao-rodape">
+                <span className="conexao-cartao-hora">{conexaoEmTestes(id) ? T.conexoes.emTestes : c.ultimaAtualizacao ? T.conexoes.atualizado(horarioRelativo(c.ultimaAtualizacao)) : T.conexoes.nunca}</span>
+                <span className="conexao-cartao-interativo conexao-cartao-acoes">
+                  {c.chaveSalva && !conexaoEmTestes(id) && (
+                    <>
+                      <Botao
+                        pequeno
+                        soIcone
+                        variante="fantasma"
+                        icone={<RefreshCw size={13} />}
+                        aria-label={T.conexoes.atualizarAgora}
+                        title={T.conexoes.atualizarAgora}
+                        onClick={() => {
+                          void tocarSom("search");
+                          void atualizarConexaoAgora(id);
+                        }}
+                      />
+                      <Botao
+                        pequeno
+                        soIcone
+                        variante="fantasma"
+                        icone={c.fixadaNaIlha ? <PinOff size={13} /> : <Pin size={13} />}
+                        aria-label={T.conexoes.fixarNaIlha}
+                        title={T.conexoes.fixarNaIlha}
+                        aria-pressed={c.fixadaNaIlha}
+                        disabled={!c.fixadaNaIlha && conexoes.filter((x) => x.fixadaNaIlha).length >= 4}
+                        onClick={() => atualizar(id, { fixadaNaIlha: !c.fixadaNaIlha })}
+                      />
+                    </>
+                  )}
+                  <Botao pequeno soIcone variante="fantasma" icone={<KeyRound size={13} />} aria-label={c.chaveSalva ? T.janelaConexao.configurar : T.conexoes.conectar} title={c.chaveSalva ? T.janelaConexao.configurar : T.conexoes.conectar} onClick={() => setConfigurando(id)} />
+                </span>
               </div>
-            </Cartao>
+            </article>
           );
         })}
-      </div>
-      <Configurar servico={configurando} aoFechar={() => setConfigurando(null)} />
+      </section>
+      <Configurar key={configurando ?? "fechado"} servico={configurando} aoFechar={() => setConfigurando(null)} />
     </>
   );
 }

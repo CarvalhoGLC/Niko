@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  Bell, Bot, Check, ChevronRight, CircleCheck, CircleX, Code2, Copy, FilePen, FileText, FolderOpen, FolderSearch, Globe, ListChecks, LoaderCircle, MessageSquare, Search, Settings, ShieldAlert, SquareTerminal, X, type LucideIcon,
+  Bell, Bot, ChartNoAxesColumn, Check, Plug, ChevronRight, CircleCheck, CircleX, Code2, Copy, FilePen, FileText, FolderOpen, FolderSearch, Globe, ListChecks, LoaderCircle, MessageCircleQuestion, MessageSquare, Search, Settings, ShieldAlert, SquareTerminal, X, type LucideIcon,
 } from "lucide-react";
-import { useClaudeCode, type PassoClaude, type SessaoClaude, type PedidoDePermissao } from "../../../estado/claudeCode";
+import { useClaudeCode, type PassoClaude, type SessaoClaude, type PedidoDePermissao, type PerguntaDoClaude } from "../../../estado/claudeCode";
 import { agentesDeCodigo, claudeCode, FERRAMENTAS_DE_CODIGO, type RegraSugerida } from "../../../ponte/claudeCode";
 import { contarMudancas } from "../../../utilitarios/diff";
 import { DiffCompacto } from "./DiffCompacto";
@@ -17,7 +17,11 @@ import "./claude.css";
 import { EtapasAnimadas } from "../animacoes/EtapasAnimadas";
 import { fecharSessao } from "./usarClaudeCode";
 import { ConfigDasFerramentas } from "./ConfigDasFerramentas";
+import { ResumoDaSemana } from "./ResumoDaSemana";
+import { trazerTerminalDaSessao } from "../../../desktop/usarAtalhosGlobais";
 import { MARCA_DA_FERRAMENTA, nomeDaFerramenta } from "./ferramentas";
+import { indicadorDePermissoes } from "./indicadorDePermissoes";
+import { pedidoDaSessao } from "../../../utilitarios/pedidoDaSessao";
 
 const ESPERA_MS = 110_000;
 const C = T.ilha.claude;
@@ -73,11 +77,100 @@ function abrirProjeto(cwd: string, como: "vscode" | "pasta") {
   });
 }
 
+function Pergunta({ pedido, perguntas, fila }: { pedido: PedidoDePermissao; perguntas: PerguntaDoClaude[]; fila: number }) {
+  const agora = usarAgora(1000);
+  const [enviando, setEnviando] = useState(false);
+  const [escolhas, setEscolhas] = useState<number[][]>(() => perguntas.map(() => []));
+  const restante = Math.max(0, Math.ceil((Date.parse(pedido.recebidoEm) + ESPERA_MS - agora) / 1000));
+  const completo = perguntas.every((_, i) => (escolhas[i]?.length ?? 0) > 0);
+  const nome = nomeDaFerramenta(pedido.ferramentaDeCodigo);
+
+  const enviar = (acao: () => Promise<unknown>, som: "approve" | "close") => {
+    if (enviando) return;
+    setEnviando(true);
+    acao()
+      .then(() => {
+        useClaudeCode.getState().removerPedido(pedido.pedidoId);
+        void tocarSom(som, "avisos");
+      })
+      .catch(() => {
+        void claudeCode.decidir(pedido.pedidoId, "terminal").catch(() => undefined);
+        useClaudeCode.getState().removerPedido(pedido.pedidoId);
+        useIlha.getState().revelar({ texto: C.decisaoFalhou, tipo: "alerta", marca: "claudecode", aba: "claude" }, 5000);
+      })
+      .finally(() => setEnviando(false));
+  };
+  const responder = (respostas: number[][]) => enviar(() => claudeCode.responder(pedido.pedidoId, respostas), "approve");
+  const escolher = (indicePergunta: number, indiceOpcao: number) => {
+    const p = perguntas[indicePergunta];
+    const atuais = escolhas[indicePergunta] ?? [];
+    const proximas = p.varias ? (atuais.includes(indiceOpcao) ? atuais.filter((x) => x !== indiceOpcao) : [...atuais, indiceOpcao]) : [indiceOpcao];
+    const todas = escolhas.map((e, i) => (i === indicePergunta ? proximas : e));
+    setEscolhas(todas);
+    if (perguntas.length === 1 && !p.varias) responder(todas);
+  };
+
+  return (
+    <div className="vsc-permissao vsc-pergunta" role="alertdialog" aria-label={C.pergunta.titulo(nome)}>
+      <div className="vsc-permissao-topo">
+        <MessageCircleQuestion size={15} />
+        <Marca marca={MARCA_DA_FERRAMENTA[pedido.ferramentaDeCodigo]} tamanho={14} />
+        <span>{C.pergunta.titulo(nome)}</span>
+        <span className="vsc-chip">{pedido.projeto}</span>
+      </div>
+      {perguntas.map((p, ip) => (
+        <div key={`${ip}-${p.pergunta}`} className="vsc-pergunta-bloco" role="group" aria-label={p.pergunta}>
+          {p.titulo && <span className="vsc-pergunta-cabecalho">{p.titulo}</span>}
+          <p className="vsc-pergunta-texto">{p.pergunta}</p>
+          {p.varias && <span className="vsc-dim">{C.pergunta.varias}</span>}
+          <div className="vsc-pergunta-opcoes">
+            {p.opcoes.map((o, io) => {
+              const marcada = escolhas[ip]?.includes(io) ?? false;
+              return (
+                <button
+                  key={`${io}-${o.rotulo}`}
+                  type="button"
+                  role={p.varias ? "checkbox" : "radio"}
+                  aria-checked={marcada}
+                  className="vsc-pergunta-opcao"
+                  data-marcada={marcada || undefined}
+                  disabled={enviando}
+                  onClick={() => escolher(ip, io)}
+                >
+                  <span className="vsc-pergunta-rotulo">{o.rotulo}</span>
+                  {o.descricao && <span className="vsc-pergunta-descricao">{o.descricao}</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <div className="vsc-permissao-rodape">
+        <span className="vsc-dim">
+          {C.expiraEm(restante)}
+          {fila > 1 ? ` . ${C.maisPedidos(fila - 1)}` : ""}
+        </span>
+        <span className="vsc-barra-tempo" style={{ ["--resto" as string]: `${(restante / (ESPERA_MS / 1000)) * 100}%` }} />
+        <button type="button" className="vsc-botao vsc-botao-link" disabled={enviando} title={C.pergunta.terminalDica} onClick={() => enviar(() => claudeCode.decidir(pedido.pedidoId, "terminal"), "close")}>
+          {C.pergunta.noTerminal}
+        </button>
+        {(perguntas.length > 1 || perguntas.some((p) => p.varias)) && (
+          <button type="button" className="vsc-botao vsc-botao-primario" disabled={enviando || !completo} onClick={() => responder(escolhas)}>
+            {enviando ? <LoaderCircle size={13} className="girando" /> : <Check size={13} />}
+            {C.pergunta.enviar}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Permissao({ pedido, fila }: { pedido: PedidoDePermissao; fila: number }) {
   const agora = usarAgora(1000);
   const [enviando, setEnviando] = useState(false);
   const restante = Math.max(0, Math.ceil((Date.parse(pedido.recebidoEm) + ESPERA_MS - agora) / 1000));
   const regra = pedido.sugestoes[0];
+  const cwdDaSessao = useClaudeCode((s) => s.sessoes[pedido.sessao]?.cwd);
   const textoRegra = regra ? `${regra.toolName}(${regra.ruleContent})` : "";
   const decidir = (decisao: "allow" | "deny" | "terminal", comRegra?: RegraSugerida) => {
     if (enviando) return;
@@ -102,7 +195,7 @@ function Permissao({ pedido, fila }: { pedido: PedidoDePermissao; fila: number }
         <span>{C.querPermissao(nomeDaFerramenta(pedido.ferramentaDeCodigo), pedido.ferramenta)}</span>
         <span className="vsc-chip">{pedido.projeto}</span>
       </div>
-      {pedido.alteracao ? <DiffCompacto alteracao={pedido.alteracao} maximo={80} /> : <pre className="vsc-codigo">{pedido.entrada}</pre>}
+      {pedido.alteracao ? <DiffCompacto alteracao={pedido.alteracao} maximo={80} cwd={cwdDaSessao || undefined} /> : <pre className="vsc-codigo">{pedido.entrada}</pre>}
       <div className="vsc-permissao-rodape">
         <span className="vsc-dim">
           {C.expiraEm(restante)}
@@ -128,6 +221,10 @@ function Permissao({ pedido, fila }: { pedido: PedidoDePermissao; fila: number }
       </div>
     </div>
   );
+}
+
+export function PedidoDeCodigo({ pedido }: { pedido: PedidoDePermissao }) {
+  return pedido.perguntas ? <Pergunta key={pedido.pedidoId} pedido={pedido} perguntas={pedido.perguntas} fila={1} /> : <Permissao key={pedido.pedidoId} pedido={pedido} fila={1} />;
 }
 
 function Atividade({ sessao }: { sessao: SessaoClaude }) {
@@ -187,7 +284,7 @@ function Atividade({ sessao }: { sessao: SessaoClaude }) {
             )}
             {aberto && p.alteracao && (
               <div className="vsc-linha-diff">
-                <DiffCompacto alteracao={p.alteracao} />
+                <DiffCompacto alteracao={p.alteracao} cwd={sessao.cwd || undefined} />
               </div>
             )}
           </div>
@@ -258,17 +355,15 @@ function SemSessoes({ conectado, aoConfigurar }: { conectado: boolean; aoConfigu
       </span>
       <b>{conectado ? C.semSessoes : C.naoConectado}</b>
       <span className="vsc-dim">{conectado ? C.semSessoesDica : C.naoConectadoDica}</span>
-      {!conectado && (
-        <button type="button" className="vsc-botao vsc-botao-primario" onClick={aoConfigurar}>
-          <Settings size={13} />
-          {C.abrirConfiguracoes}
-        </button>
-      )}
+      <button type="button" className="vsc-botao vsc-botao-primario" onClick={aoConfigurar}>
+        {conectado ? <Plug size={13} /> : <Settings size={13} />}
+        {C.abrirConfiguracoes}
+      </button>
     </div>
   );
 }
 
-export function VisaoClaude() {
+export function VisaoClaude({ somenteSessaoSelecionada = false }: { somenteSessaoSelecionada?: boolean } = {}) {
   const sessoes = useClaudeCode((s) => s.sessoes);
   const ordem = useClaudeCode((s) => s.ordem);
   const pedidos = useClaudeCode((s) => s.pedidos);
@@ -277,9 +372,11 @@ export function VisaoClaude() {
   const agora = usarAgora(30000);
   const [conectado, setConectado] = useState(true);
   const [configAberta, setConfigAberta] = useState(false);
+  const [resumoAberto, setResumoAberto] = useState(false);
   const sessao = sessoes[focada ?? ""] ?? sessoes[ordem[0]];
-  const pedido = pedidos.find((p) => p.sessao === sessao?.id) ?? pedidos[0];
+  const pedido = pedidoDaSessao(pedidos, sessao?.id, somenteSessaoSelecionada);
   const [painel, setPainel] = useState<"resposta" | "atividade">("atividade");
+  const indicador = sessao ? indicadorDePermissoes(sessao, Math.max(agora, Date.now())) : null;
 
   useEffect(() => {
     if (configAberta) return;
@@ -317,8 +414,13 @@ export function VisaoClaude() {
         })}
       </div>
         <span className="vsc-acoes-abas">
-          {sessao?.modo && <span className="vsc-dim vsc-acoes-texto">{C.modos[sessao.modo] ?? sessao.modo}</span>}
+          {indicador && <span className="vsc-dim vsc-acoes-texto vsc-modo-permissao" aria-label={indicador.texto} title={`${indicador.texto}. ${indicador.dica}`}>{indicador.texto}</span>}
           {sessao && <span className="vsc-dim vsc-acoes-texto">{quandoFoi(sessao.atualizadaEm, agora)}</span>}
+          {sessao && (
+            <button type="button" className="vsc-icone-botao" aria-label={C.terminal.trazer} title={C.terminal.trazer} onClick={() => trazerTerminalDaSessao(sessao.id)}>
+              <SquareTerminal size={13} />
+            </button>
+          )}
           {sessao?.cwd && (
             <>
               <button type="button" className="vsc-icone-botao" aria-label={C.abrirVsCode} title={C.abrirVsCode} onClick={() => abrirProjeto(sessao.cwd, "vscode")}>
@@ -330,6 +432,9 @@ export function VisaoClaude() {
             </>
           )}
           <UsoDasIas />
+          <button type="button" className="vsc-icone-botao" aria-label={C.resumo.abrir} title={C.resumo.abrir} aria-pressed={resumoAberto} onClick={() => setResumoAberto((v) => !v)}>
+            <ChartNoAxesColumn size={13} />
+          </button>
           <button type="button" className="vsc-icone-botao vsc-engrenagem" aria-label={C.configurar} title={C.configurar} aria-pressed={configAberta} onClick={() => setConfigAberta((v) => !v)}>
             <Settings size={13} />
           </button>
@@ -340,7 +445,7 @@ export function VisaoClaude() {
         {!sessao ? (
           <SemSessoes conectado={conectado} aoConfigurar={() => setConfigAberta(true)} />
         ) : pedido ? (
-          <Permissao pedido={pedido} fila={pedidos.length} />
+          pedido.perguntas ? <Pergunta key={pedido.pedidoId} pedido={pedido} perguntas={pedido.perguntas} fila={pedidos.length} /> : <Permissao pedido={pedido} fila={pedidos.length} />
         ) : (
           <>
             <div className="vsc-paineis" role="tablist">
@@ -359,6 +464,7 @@ export function VisaoClaude() {
         )}
       </div>
       <AnimatePresence>{configAberta && <ConfigDasFerramentas key="config" aoFechar={() => setConfigAberta(false)} />}</AnimatePresence>
+      <AnimatePresence>{resumoAberto && !configAberta && <ResumoDaSemana key="resumo" aoFechar={() => setResumoAberto(false)} />}</AnimatePresence>
     </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import { AnimatePresence } from "motion/react";
 import { Ilha } from "../ilha/Ilha";
 import { Dock } from "../dock/Dock";
+import { AssistiveTouch } from "../assistive/AssistiveTouch";
 import { JanelaSistema } from "../sistema/JanelaSistema";
 import { JanelaConexao } from "../../modulos/conexoes/JanelaConexao";
 import { BuscaGlobal } from "../../modulos/busca/BuscaGlobal";
@@ -31,6 +32,7 @@ export function AreaDeTrabalho() {
       </AnimatePresence>
       <Ilha />
       <Dock />
+      <AssistiveTouch />
       <BuscaGlobal />
       <CapturaRapida />
       {!primeira && <PrimeiraExecucao />}

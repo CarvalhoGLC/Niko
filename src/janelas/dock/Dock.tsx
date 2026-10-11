@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
-import { NATIVO, ROTULO, usarAreaInterativa, usarCursorFora, usarAppsAbertos, agirNaJanela, alternarSistemaNativo, mostrarMiniaturas, ocultarBarraDoWindows, reservarEspacoDoDock, usarEstadoDaFrente, definirDocks, usarMonitores, type AppAberto } from "../../desktop/desktop";
+import { Search, X, Activity, FolderOpen, SquareTerminal, Settings, AppWindow, Minus, MousePointer, SlidersHorizontal } from "lucide-react";
+import { MenuDock, type AlvoMenuDock, type ItemMenuDock } from "./MenuDock";
+import { executarNasJanelas } from "./acoesDoMenu";
+import { NATIVO, ROTULO, usarAreaInterativa, usarCursorFora, usarAppsAbertos, agirNaJanela, alternarSistemaNativo, mostrarMiniaturas, ocultarBarraDoWindows, reservarEspacoDoDock, usarEstadoDaFrente, definirDocks, usarMonitores, ouvirEvento, devolverFoco, type AppAberto } from "../../desktop/desktop";
+import { BuscaApps } from "./BuscaApps";
 import { cadaDockMostraSeusApps, dockAtivoNoMonitor, meuMonitor, TODOS_OS_MONITORES } from "./monitores";
+import { agruparApps, nomeDoGrupo } from "./grupos";
 import { AnimatePresence, motion, useMotionValue, useSpring, useTransform, type MotionValue } from "motion/react";
 import { useConfig } from "../../estado/configuracoes";
 import { useInterface } from "../../estado/interface";
@@ -14,6 +18,9 @@ import { ALTURA_DOCK, alguemCobre } from "../geometria";
 import { ICONE_ROTA } from "../sistema/rotas";
 import { COR_AGENTE } from "../../personagens/cores";
 import { atributosDoFundo, usarAparenciaDeBorda, variaveisDaBorda } from "../aparencia";
+import { controle } from "../../ponte/ponteLocal";
+import { criarAlternadorDoIniciar } from "../ilha/barra/acoesDaBarra";
+import { useIlha } from "../../estado/ilha";
 import "./dock.css";
 
 interface PropsItemDock {
@@ -27,9 +34,14 @@ interface PropsItemDock {
   semDica?: boolean;
   aoEntrar?: (e: React.PointerEvent<HTMLButtonElement>) => void;
   aoSair?: () => void;
+  aoPressionar?: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  aoFocar?: () => void;
+  aoDesfocar?: () => void;
+  ocupado?: boolean;
+  aoMenu?: (e: React.MouseEvent<HTMLElement>) => void;
 }
 
-function ItemDock({ mouseX, ampliar, rotulo, estado, aoClicar, children, alerta, semDica, aoEntrar, aoSair }: PropsItemDock) {
+function ItemDock({ mouseX, ampliar, rotulo, estado, aoClicar, children, alerta, semDica, aoEntrar, aoSair, aoPressionar, aoFocar, aoDesfocar, ocupado, aoMenu }: PropsItemDock) {
   const ref = useRef<HTMLButtonElement>(null);
   const distancia = useTransform(mouseX, (x) => {
     const r = ref.current?.getBoundingClientRect();
@@ -46,10 +58,22 @@ function ItemDock({ mouseX, ampliar, rotulo, estado, aoClicar, children, alerta,
       data-estado={estado}
       style={{ width: tamanho, height: tamanho }}
       aria-label={rotulo}
+      aria-busy={ocupado || undefined}
+      disabled={ocupado}
       title={semDica ? undefined : rotulo}
       onClick={aoClicar}
+      onContextMenu={aoMenu}
+      onKeyDown={(e) => {
+        if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+          e.preventDefault();
+          e.currentTarget.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+        }
+      }}
       onPointerEnter={aoEntrar}
       onPointerLeave={aoSair}
+      onPointerDown={aoPressionar}
+      onFocus={aoFocar}
+      onBlur={aoDesfocar}
       whileTap={{ scale: 0.9 }}
       layout
       initial={{ opacity: 0, scale: 0.6 }}
@@ -61,6 +85,33 @@ function ItemDock({ mouseX, ampliar, rotulo, estado, aoClicar, children, alerta,
       {alerta && <span className="dock-alerta" style={{ background: alerta }} aria-hidden="true" />}
     </motion.button>
   );
+}
+
+function IniciarDoDock({ mouseX, ampliar, visivel, aoAcionar }: { mouseX: MotionValue<number>; ampliar: boolean; visivel: boolean; aoAcionar: () => void }) {
+  const iniciar = useRef(criarAlternadorDoIniciar(controle.iniciar, controle.alternarIniciar));
+  const relogio = useRef<number | undefined>(undefined);
+  const [ocupado, setOcupado] = useState(false);
+  const limpar = useCallback(() => {
+    window.clearInterval(relogio.current);
+    iniciar.current.limpar();
+  }, []);
+  useEffect(() => {
+    if (!visivel) limpar();
+    window.addEventListener("blur", limpar);
+    return () => { limpar(); window.removeEventListener("blur", limpar); };
+  }, [visivel, limpar]);
+  return <ItemDock mouseX={mouseX} ampliar={ampliar} rotulo={T.ilha.barra.iniciar} ocupado={ocupado}
+    aoEntrar={() => {
+      iniciar.current.preparar();
+      window.clearInterval(relogio.current);
+      relogio.current = window.setInterval(() => iniciar.current.preparar(), 400);
+    }} aoSair={limpar} aoFocar={() => iniciar.current.preparar()} aoDesfocar={limpar}
+    aoPressionar={(e) => { if (e.button === 0) e.preventDefault(); }}
+    aoClicar={() => {
+      if (ocupado) return;
+      aoAcionar(); setOcupado(true); void tocarSom("blip");
+      void iniciar.current.alternar().catch(() => useIlha.getState().avisarFalha(T.ilha.barra.indisponivel)).finally(() => setOcupado(false));
+    }}><span className="dock-icone"><span className="dock-windows" aria-hidden="true" /></span></ItemDock>;
 }
 
 const LARGURA_CARTAO_PREVIA = 196;
@@ -119,18 +170,14 @@ function PreviaJanelas({ lista, esquerda, aoEntrar, aoSair, aoFocar, aoFechar }:
   );
 }
 
-function AppsDoWindows({ mouseX, ampliar, ativo, monitor }: { mouseX: MotionValue<number>; ampliar: boolean; ativo: boolean; monitor?: string }) {
+function AppsDoWindows({ mouseX, ampliar, ativo, monitor, menuAberto, abrirMenu }: { mouseX: MotionValue<number>; ampliar: boolean; ativo: boolean; monitor?: string; menuAberto: boolean; abrirMenu: (e: React.MouseEvent<HTMLElement>, titulo: string, itens: ItemMenuDock[]) => void }) {
   const [todosOsApps, atualizar] = usarAppsAbertos(ativo);
   const apps = monitor && todosOsApps.some((a) => a.monitor !== undefined) ? todosOsApps.filter((a) => a.monitor === monitor) : todosOsApps;
   const [previa, setPrevia] = useState<{ chave: string; centro: number; esquerdaDock: number } | null>(null);
   const relogioAbrir = useRef<number | undefined>(undefined);
   const relogioFechar = useRef<number | undefined>(undefined);
-  const grupos = new Map<string, AppAberto[]>();
-  for (const a of apps) {
-    const chave = a.app === "ApplicationFrameHost" ? `uwp-${a.titulo}` : (a.caminho ?? a.app);
-    grupos.set(chave, [...(grupos.get(chave) ?? []), a]);
-  }
-  const listaDaPrevia = previa && ativo ? grupos.get(previa.chave) : undefined;
+  const grupos = agruparApps(apps);
+  const listaDaPrevia = previa && ativo && !menuAberto ? grupos.get(previa.chave) : undefined;
   usarMiniaturasDaPrevia(Boolean(listaDaPrevia?.length), previa?.chave ?? null);
 
   useEffect(
@@ -153,6 +200,7 @@ function AppsDoWindows({ mouseX, ampliar, ativo, monitor }: { mouseX: MotionValu
     setPrevia(null);
   };
   const entrarNoItem = (chave: string, e: React.PointerEvent<HTMLButtonElement>) => {
+    if (menuAberto) return;
     cancelarFechamento();
     window.clearTimeout(relogioAbrir.current);
     const r = e.currentTarget.getBoundingClientRect();
@@ -195,7 +243,7 @@ function AppsDoWindows({ mouseX, ampliar, ativo, monitor }: { mouseX: MotionValu
         {[...grupos.entries()].map(([chave, lista]) => {
           const ativa = lista.find((j) => j.ativa);
           const principal = lista[0];
-          const nome = principal.app === "ApplicationFrameHost" ? principal.titulo : principal.nome || principal.app;
+          const nome = nomeDoGrupo(principal);
           return (
             <ItemDock
               key={chave}
@@ -206,6 +254,23 @@ function AppsDoWindows({ mouseX, ampliar, ativo, monitor }: { mouseX: MotionValu
               semDica
               aoEntrar={(e) => entrarNoItem(chave, e)}
               aoSair={agendarFechamento}
+              aoMenu={(e) => {
+                fecharPrevia();
+                const agir = (acao: "focar" | "minimizar" | "fechar", alvos: AppAberto[]) => async () => {
+                  try { await executarNasJanelas(acao, alvos); } finally { atualizar(); }
+                };
+                const itensDaJanela = (j: AppAberto): ItemMenuDock[] => [
+                  { id: "focar", texto: j.minimizada ? T.janela.restaurar : T.dock.menu.mostrar, icone: AppWindow, acao: agir("focar", [j]) },
+                  { id: "minimizar", texto: T.janela.minimizar, icone: Minus, desativado: j.minimizada, acao: agir("minimizar", [j]) },
+                  { id: "fechar", texto: T.dock.fecharJanela, icone: X, perigo: true, acao: agir("fechar", [j]) },
+                ];
+                abrirMenu(e, nome, lista.length === 1 ? itensDaJanela(principal) : [
+                  { id: "janelas", texto: `${T.dock.menu.janelas} (${lista.length})`, icone: AppWindow, itens: lista.map((j) => ({ id: j.id, texto: j.titulo || nome, marcado: j.ativa, itens: itensDaJanela(j) })) },
+                  { id: "mostrarTodas", texto: T.dock.menu.mostrarTodas, icone: AppWindow, acao: agir("focar", lista) },
+                  { id: "minimizarTodas", texto: T.dock.menu.minimizarTodas, icone: Minus, desativado: lista.every((j) => j.minimizada), acao: agir("minimizar", lista) },
+                  { id: "fecharTodas", texto: T.dock.menu.fecharTodas, icone: X, perigo: true, confirmar: true, acao: agir("fechar", lista) },
+                ]);
+              }}
               aoClicar={() => {
                 void tocarSom("blip");
                 fecharPrevia();
@@ -244,7 +309,31 @@ export function Dock() {
   const alerta = useAgentes((s) => s.alertas[0]);
   const mouseX = useMotionValue(Infinity);
   const [perto, setPerto] = useState(false);
-  usarAreaInterativa([".dock", ".dock-gatilho", ".dock-previa"]);
+  const [buscaAberta, setBuscaAberta] = useState(false);
+  const [menu, setMenu] = useState<AlvoMenuDock | null>(null);
+  const menuAtual = useRef(menu);
+  menuAtual.current = menu;
+  const fecharMenu = useCallback((devolver = false) => {
+    const origem = menuAtual.current?.origem;
+    setMenu(null);
+    if (devolver && origem?.isConnected) origem.focus();
+  }, []);
+  const abrirMenu = (e: React.MouseEvent<HTMLElement>, titulo: string, itens: ItemMenuDock[]) => {
+    e.preventDefault(); e.stopPropagation();
+    const origem = (e.target as HTMLElement).closest<HTMLElement>(".dock-item") ?? e.currentTarget;
+    const r = origem.getBoundingClientRect();
+    const teclado = e.clientX === 0 && e.clientY === 0;
+    setBuscaAberta(false); mouseX.set(Infinity);
+    setMenu({ x: teclado ? r.left : e.clientX, y: Math.min(teclado ? r.top : e.clientY, r.top), origem, titulo, itens });
+  };
+  const buscaAbertaAgora = useRef(false);
+  buscaAbertaAgora.current = buscaAberta;
+  const fecharBusca = useCallback(() => setBuscaAberta(false), []);
+  const alternarBusca = useCallback(() => {
+    if (buscaAbertaAgora.current) void devolverFoco();
+    setBuscaAberta(!buscaAbertaAgora.current);
+  }, []);
+  usarAreaInterativa([".dock", ".dock-gatilho", ".dock-previa", ".dock-busca", ".dock-menu"]);
   usarCursorFora(useCallback(() => setPerto(false), []));
   const caixa = useRef<HTMLDivElement>(null);
 
@@ -283,12 +372,29 @@ export function Dock() {
     if (frente.telaCheia) setPerto(false);
   }, [frente.telaCheia]);
 
+  useEffect(() => {
+    let vivo = true;
+    let desligar: () => void = () => undefined;
+    void ouvirEvento("niko://lupa", alternarBusca, true).then((f) => {
+      if (vivo) desligar = f;
+      else f();
+    });
+    return () => {
+      vivo = false;
+      desligar();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ativoAqui || frente.telaCheia) { setBuscaAberta(false); setMenu(null); }
+  }, [ativoAqui, frente.telaCheia]);
+
   if (!ativoAqui || frente.telaCheia) return null;
 
-  const largura = 90 + (janelas.length + (aberto ? 1 : 0)) * 50;
+  const largura = 70 + (Number(cfg.mostrarIniciar) + Number(cfg.mostrarBusca) + janelas.length + (aberto ? 1 : 0)) * 50;
   const area = { x: (window.innerWidth - largura) / 2, y: window.innerHeight - ALTURA_DOCK, w: largura, h: ALTURA_DOCK };
   const coberto = cfg.modo === "inteligente" && (NATIVO ? frente.cobre : alguemCobre(area));
-  const escondido = (cfg.modo === "esconder" || coberto) && !perto;
+  const escondido = (cfg.modo === "esconder" || coberto) && !perto && !buscaAberta && !menu;
   const sistemaNaFrente = aberto && !minimizado && zSistema === proximoZ - 1;
   const fundo = aparencia.fundo;
   const IconeAba = ICONE_ROTA[rota];
@@ -323,6 +429,24 @@ export function Dock() {
     alternarSistema();
   };
 
+  const itensDoDock: ItemMenuDock[] = [
+    ...(["tarefas", "arquivos", "terminal", "configuracoes", "painel"] as const).map((comando, indice) => ({
+      id: comando, texto: T.dock.busca.comandos[comando], icone: [Activity, FolderOpen, SquareTerminal, Settings, SlidersHorizontal][indice],
+      acao: async () => { await controle.comandoDoSistema(comando); },
+    })),
+    { id: "busca", texto: T.dock.busca.botao, icone: Search, acao: () => setBuscaAberta(true) },
+    { id: "mostrar-iniciar", texto: T.dock.menu.mostrarIniciar, icone: AppWindow, marcado: cfg.mostrarIniciar,
+      acao: () => { const s = useConfig.getState(); s.definir({ dock: { ...s.dock, mostrarIniciar: !s.dock.mostrarIniciar } }); } },
+    { id: "mostrar-busca", texto: T.dock.menu.mostrarBusca, icone: Search, marcado: cfg.mostrarBusca,
+      acao: () => { const s = useConfig.getState(); s.definir({ dock: { ...s.dock, mostrarBusca: !s.dock.mostrarBusca } }); } },
+    { id: "comportamento", texto: T.dock.menu.comportamento, icone: SlidersHorizontal, itens: (["fixo", "esconder", "inteligente"] as const).map((modo) => ({
+      id: modo, texto: T.configuracoes.modos[modo], marcado: cfg.modo === modo,
+      acao: () => { const s = useConfig.getState(); s.definir({ dock: { ...s.dock, modo } }); },
+    })) },
+    { id: "ampliar", texto: T.dock.menu.ampliar, icone: MousePointer, marcado: cfg.ampliar,
+      acao: () => { const s = useConfig.getState(); s.definir({ dock: { ...s.dock, ampliar: !s.dock.ampliar } }); } },
+  ];
+
   return (
     <>
       {escondido && <div className="dock-gatilho" onPointerEnter={() => setPerto(true)} />}
@@ -335,6 +459,10 @@ export function Dock() {
         animate={{ y: escondido ? ALTURA_DOCK + 8 : 0 }}
         transition={{ type: "spring", visualDuration: 0.35, bounce: 0.15 }}
         onPointerMove={(e) => mouseX.set(e.clientX)}
+        onContextMenu={(e) => {
+          if ((e.target as HTMLElement).closest(".dock-busca, .dock-previa, .dock-menu")) return;
+          abrirMenu(e, T.dock.menu.titulo, itensDoDock);
+        }}
         onPointerLeave={() => {
           mouseX.set(Infinity);
           if (cfg.modo !== "fixo") window.setTimeout(() => !caixa.current?.matches(":hover") && setPerto(false), 500);
@@ -342,17 +470,37 @@ export function Dock() {
       >
         <span className="dock-orelha dock-orelha-esquerda" style={{ ["--fundo-dock" as string]: fundo }} aria-hidden="true" />
         <span className="dock-orelha dock-orelha-direita" style={{ ["--fundo-dock" as string]: fundo }} aria-hidden="true" />
-        <ItemDock mouseX={mouseX} ampliar={cfg.ampliar} rotulo={T.dock.abrir} aoClicar={abrirNiko} alerta={alerta ? COR_AGENTE[alerta.agenteId] : undefined}>
+        {menu && <MenuDock key={`${menu.x}-${menu.y}-${menu.titulo}`} alvo={menu} aoFechar={fecharMenu} />}
+        <ItemDock mouseX={mouseX} ampliar={cfg.ampliar} rotulo={T.dock.abrir} aoClicar={abrirNiko} aoMenu={(e) => abrirMenu(e, T.app.nome, [{ id: "abrir", texto: T.dock.abrir, icone: AppWindow, acao: abrirNiko }, ...itensDoDock])} alerta={alerta ? COR_AGENTE[alerta.agenteId] : undefined}>
           <span className="dock-logo"><LogoNiko tamanho={28} /></span>
         </ItemDock>
+        {cfg.mostrarIniciar && <IniciarDoDock mouseX={mouseX} ampliar={cfg.ampliar} visivel={!escondido} aoAcionar={fecharBusca} />}
+        {cfg.mostrarBusca && <ItemDock
+          mouseX={mouseX}
+          ampliar={cfg.ampliar}
+          rotulo={T.dock.busca.botao}
+          estado={buscaAberta ? "aberto" : undefined}
+          aoClicar={() => {
+            void tocarSom(buscaAberta ? "close" : "open");
+            alternarBusca();
+          }}
+        >
+          <span className="dock-icone"><Search size={19} /></span>
+        </ItemDock>}
+        {buscaAberta && <BuscaApps aoFechar={fecharBusca} />}
         {NATIVO ? (
-          <AppsDoWindows mouseX={mouseX} ampliar={cfg.ampliar} ativo={!escondido} monitor={monitorDosApps} />
+          <AppsDoWindows mouseX={mouseX} ampliar={cfg.ampliar} ativo={!escondido} monitor={monitorDosApps} menuAberto={Boolean(menu)} abrirMenu={abrirMenu} />
         ) : (
         <>
         {(aberto || janelas.length > 0) && <span className="dock-separador" />}
         <AnimatePresence initial={false}>
           {aberto && (
-            <ItemDock key="sistema" mouseX={mouseX} ampliar={cfg.ampliar} rotulo={`${T.app.nome}: ${nomeAba}`} estado={minimizado ? "minimizado" : sistemaNaFrente ? "frente" : "aberto"} aoClicar={alternarSistema}>
+            <ItemDock key="sistema" mouseX={mouseX} ampliar={cfg.ampliar} rotulo={`${T.app.nome}: ${nomeAba}`} estado={minimizado ? "minimizado" : sistemaNaFrente ? "frente" : "aberto"} aoClicar={alternarSistema}
+              aoMenu={(e) => abrirMenu(e, nomeAba, [
+                { id: "mostrar", texto: minimizado ? T.janela.restaurar : T.dock.menu.mostrar, icone: AppWindow, acao: () => { definirSistema({ sistemaMinimizado: false }); focar(); } },
+                { id: "minimizar", texto: T.janela.minimizar, icone: Minus, desativado: minimizado, acao: () => definirSistema({ sistemaMinimizado: true }) },
+                { id: "fechar", texto: T.dock.fecharJanela, icone: X, perigo: true, acao: () => definirSistema({ sistemaAberto: false }) },
+              ])}>
               <span className="dock-icone"><IconeAba size={19} /></span>
             </ItemDock>
           )}
@@ -363,6 +511,11 @@ export function Dock() {
               ampliar={cfg.ampliar}
               rotulo={T.conexoes.servicos[j.id].nome}
               estado={j.minimizada ? "minimizado" : "aberto"}
+              aoMenu={(e) => abrirMenu(e, T.conexoes.servicos[j.id].nome, [
+                { id: "mostrar", texto: j.minimizada ? T.janela.restaurar : T.dock.menu.mostrar, icone: AppWindow, acao: () => { atualizarJanela(j.id, { minimizada: false }); focarConexao(j.id); } },
+                { id: "minimizar", texto: T.janela.minimizar, icone: Minus, desativado: j.minimizada, acao: () => atualizarJanela(j.id, { minimizada: true }) },
+                { id: "fechar", texto: T.dock.fecharJanela, icone: X, perigo: true, acao: () => useInterface.getState().fecharJanelaConexao(j.id) },
+              ])}
               aoClicar={() => {
                 void tocarSom("blip");
                 if (j.minimizada) {

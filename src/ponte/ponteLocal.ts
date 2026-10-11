@@ -120,6 +120,7 @@ export interface EstadoSistema {
   brilho: number | null;
   wifi: { ssid: string | null; sinal: number | null; conectado: boolean; existe: boolean };
   radios: Partial<Record<"WiFi" | "Bluetooth", boolean>>;
+  conexao?: { cabo: boolean; internet: boolean | null };
 }
 
 export interface RedeWifi {
@@ -149,7 +150,7 @@ export const sistema = {
   desconectar: () => pedir("/sistema/desconectar", { method: "POST", body: "{}" }),
   brilho: (nivel: number) => pedir("/sistema/brilho", { method: "POST", body: JSON.stringify({ nivel }) }),
   radio: (tipo: "WiFi" | "Bluetooth", ligado: boolean) => pedir("/sistema/radio", { method: "POST", body: JSON.stringify({ tipo, ligado }) }),
-  configuracoes: (pagina: "bluetooth" | "wifi" | "bateria") => pedir("/sistema/configuracoes", { method: "POST", body: JSON.stringify({ pagina }) }),
+  configuracoes: (pagina: "bluetooth" | "wifi" | "rede" | "bateria") => pedir("/sistema/configuracoes", { method: "POST", body: JSON.stringify({ pagina }) }),
 };
 
 export interface NivelDeAudio {
@@ -181,6 +182,19 @@ export interface ItemDaBandeja {
   icone: string | null;
 }
 
+export interface AppInstalado {
+  id: string;
+  nome: string;
+  admin: boolean;
+}
+
+export interface IconeDeApp {
+  id: string;
+  icone: string | null;
+}
+
+export type ComandoDoSistema = "rede" | "wifi" | "bluetooth" | "som" | "tela" | "configuracoes" | "atualizacoes" | "tarefas" | "adaptadores" | "terminal" | "arquivos" | "painel";
+
 export type AlvoDeAudio = "saida" | "entrada";
 export type FerramentaWindows = "captura" | "teclado" | "iniciar" | "papelDeParede";
 export type AcaoDeEnergia = "bloquear" | "suspender" | "reiniciar" | "desligar";
@@ -206,10 +220,20 @@ export const controle = {
   energia: (tipo: AcaoDeEnergia) => enviar("/controle/energia", { tipo, confirmacao: "CONFIRMADO" }),
   bandeja: () => pedir<{ itens: ItemDaBandeja[] | ItemDaBandeja | null }>("/controle/bandeja").then((r) => comoLista(r.itens)),
   abrirDaBandeja: (caminho: string) => enviar("/controle/bandeja", { caminho }),
+  pastaDaBandeja: (caminho: string) => enviar("/controle/bandejaPasta", { caminho }),
+  encerrarDaBandeja: (caminho: string) => enviar("/controle/bandejaEncerrar", { caminho, confirmacao: "CONFIRMADO" }),
+  apps: (forcar = false) => enviar<{ apps: AppInstalado[] | AppInstalado | null }>("/controle/apps", { forcar }).then((r) => comoLista(r.apps)),
+  iconesDeApps: (ids: string[]) => enviar<{ icones: IconeDeApp[] | IconeDeApp | null }>("/controle/iconesApps", { ids }).then((r) => comoLista(r.icones)),
+  abrirApp: (id: string, admin = false) => enviar("/controle/abrirApp", { id, admin }),
+  comandoDoSistema: (comando: ComandoDoSistema) => enviar("/controle/comandoDoSistema", { comando }),
 };
 
 export function lerConsumo(forcar = false) {
   return pedir<Consumo>(`/consumo${forcar ? "?forcar=1" : ""}`);
+}
+
+export function lerUsoOficial() {
+  return pedir<Consumo>("/consumo?oficial=1");
 }
 
 export async function* conversarIa(

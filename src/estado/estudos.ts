@@ -15,10 +15,18 @@ import type {
   TipoArea,
 } from "../tipos";
 import { gerarId } from "../utilitarios/basicos";
-import { hojeISO, paraISO } from "../utilitarios/datas";
+import { dataValida, deISO, hojeISO, paraISO } from "../utilitarios/datas";
+import { exigir, textoObrigatorio, validarPaiPagina } from "../utilitarios/validacoes";
 import { addDays } from "date-fns";
 
 const agendador = fsrs();
+
+function validarData(dados: Omit<DataImportante, "id" | "concluida">, materias: Materia[]) {
+  textoObrigatorio(dados.titulo, 120);
+  exigir(materias.some((m) => m.id === dados.materiaId));
+  exigir(typeof dados.data === "string" && dataValida(dados.data));
+  exigir(["prova", "entrega", "apresentacao", "inscricao", "outro"].includes(dados.tipo));
+}
 
 export const COLUNAS_POR_TIPO: Record<TipoArea, string[]> = {
   faculdade: ["A estudar", "Estudando", "Revisar", "Dominado"],
@@ -115,6 +123,8 @@ export const useEstudos = create<EstadoEstudos>()(
       links: [],
       registroRevisoes: [],
       criarArea: (nome, tipo) => {
+        nome = textoObrigatorio(nome, 60);
+        exigir(Object.hasOwn(COLUNAS_POR_TIPO, tipo));
         const area: Area = { id: gerarId(), nome: nome.trim().slice(0, 60), tipo, cor: CORES_AREA[get().areas.length % CORES_AREA.length] };
         set((s) => ({ areas: [...s.areas, area] }));
         return area;
@@ -122,16 +132,21 @@ export const useEstudos = create<EstadoEstudos>()(
       excluirArea: (id) =>
         set((s) => {
           const materias = s.materias.filter((m) => m.areaId === id).map((m) => m.id);
+          const paginas = s.paginas.filter((p) => !materias.includes(p.materiaId));
+          const restantes = new Set(paginas.map((p) => p.id));
           return {
             areas: s.areas.filter((a) => a.id !== id),
             materias: s.materias.filter((m) => m.areaId !== id),
-            paginas: s.paginas.filter((p) => !materias.includes(p.materiaId)),
+            paginas,
+            revisoesConteudo: s.revisoesConteudo.filter((r) => restantes.has(r.paginaId)),
             datas: s.datas.filter((d) => !materias.includes(d.materiaId)),
             cartoes: s.cartoes.filter((c) => !materias.includes(c.materiaId)),
           };
         }),
       criarMateria: (areaId, nome, semestre) => {
         const area = get().areas.find((a) => a.id === areaId);
+        exigir(area);
+        nome = textoObrigatorio(nome, 80);
         const materia: Materia = {
           id: gerarId(),
           areaId,
@@ -142,21 +157,44 @@ export const useEstudos = create<EstadoEstudos>()(
         set((s) => ({ materias: [...s.materias, materia] }));
         return materia;
       },
-      atualizarMateria: (id, parcial) => set((s) => ({ materias: s.materias.map((m) => (m.id === id ? { ...m, ...parcial } : m)) })),
+      atualizarMateria: (id, parcial) => set((s) => ({ materias: s.materias.map((m) => {
+        if (m.id !== id) return m;
+        const nova = { ...m, ...parcial, id: m.id };
+        exigir(s.areas.some((a) => a.id === nova.areaId));
+        nova.nome = textoObrigatorio(nova.nome, 80);
+        return nova;
+      }) })),
       excluirMateria: (id) =>
-        set((s) => ({
-          materias: s.materias.filter((m) => m.id !== id),
-          paginas: s.paginas.filter((p) => p.materiaId !== id),
-          datas: s.datas.filter((d) => d.materiaId !== id),
-          cartoes: s.cartoes.filter((c) => c.materiaId !== id),
-        })),
+        set((s) => {
+          const paginas = s.paginas.filter((p) => p.materiaId !== id);
+          const restantes = new Set(paginas.map((p) => p.id));
+          return {
+            materias: s.materias.filter((m) => m.id !== id),
+            paginas,
+            revisoesConteudo: s.revisoesConteudo.filter((r) => restantes.has(r.paginaId)),
+            datas: s.datas.filter((d) => d.materiaId !== id),
+            cartoes: s.cartoes.filter((c) => c.materiaId !== id),
+          };
+        }),
       criarPagina: (materiaId, paiId) => {
+        exigir(get().materias.some((m) => m.id === materiaId));
         const pagina: Pagina = { id: gerarId(), materiaId, paiId, titulo: "", conteudo: "", atualizadaEm: new Date().toISOString() };
+        validarPaiPagina(pagina, get().paginas);
         set((s) => ({ paginas: [...s.paginas, pagina] }));
         return pagina;
       },
       atualizarPagina: (id, parcial) =>
-        set((s) => ({ paginas: s.paginas.map((p) => (p.id === id ? { ...p, ...parcial, atualizadaEm: new Date().toISOString() } : p)) })),
+        set((s) => {
+          const paginas = s.paginas.map((p) => p.id === id ? { ...p, ...parcial, id: p.id, atualizadaEm: new Date().toISOString() } : p);
+          const p = paginas.find((p) => p.id === id);
+          if (p) {
+            exigir(s.materias.some((m) => m.id === p.materiaId));
+            exigir(typeof p.titulo === "string" && typeof p.conteudo === "string");
+            validarPaiPagina(p, paginas);
+            exigir(!paginas.some((filha) => filha.paiId === p.id && filha.materiaId !== p.materiaId));
+          }
+          return { paginas };
+        }),
       excluirPagina: (id) =>
         set((s) => {
           const remover = new Set([id]);
@@ -171,20 +209,33 @@ export const useEstudos = create<EstadoEstudos>()(
           };
         }),
       marcarEstudada: (paginaId, intervalos = [1, 7, 30]) => {
+        exigir(get().paginas.some((p) => p.id === paginaId));
+        exigir(Array.isArray(intervalos) && intervalos.length <= 100 && intervalos.every((d) => Number.isInteger(d) && d >= 1 && d <= 3650));
         const hoje = hojeISO();
         set((s) => ({
           paginas: s.paginas.map((p) => (p.id === paginaId ? { ...p, estudadaEm: hoje } : p)),
           revisoesConteudo: [
             ...s.revisoesConteudo.filter((r) => r.paginaId !== paginaId || r.feita),
-            ...intervalos.map((d) => ({ id: gerarId(), paginaId, data: paraISO(addDays(new Date(), d)), feita: false })),
+            ...intervalos.map((d) => ({ id: gerarId(), paginaId, data: paraISO(addDays(deISO(hoje), d)), feita: false })),
           ],
         }));
       },
       concluirRevisaoConteudo: (id) => set((s) => ({ revisoesConteudo: s.revisoesConteudo.map((r) => (r.id === id ? { ...r, feita: true } : r)) })),
-      criarData: (dados) => set((s) => ({ datas: [...s.datas, { ...dados, titulo: dados.titulo.trim().slice(0, 120), id: gerarId(), concluida: false }] })),
-      atualizarData: (id, parcial) => set((s) => ({ datas: s.datas.map((d) => (d.id === id ? { ...d, ...parcial } : d)) })),
+      criarData: (dados) => {
+        validarData(dados, get().materias);
+        set((s) => ({ datas: [...s.datas, { ...dados, titulo: dados.titulo.trim(), id: gerarId(), concluida: false }] }));
+      },
+      atualizarData: (id, parcial) => set((s) => ({ datas: s.datas.map((d) => {
+        if (d.id !== id) return d;
+        const nova = { ...d, ...parcial, id: d.id };
+        validarData(nova, s.materias);
+        return nova;
+      }) })),
       excluirData: (id) => set((s) => ({ datas: s.datas.filter((d) => d.id !== id) })),
       criarCartao: (materiaId, frente, verso) => {
+        exigir(get().materias.some((m) => m.id === materiaId));
+        frente = textoObrigatorio(frente, 500);
+        verso = textoObrigatorio(verso, 2000);
         const base = { id: gerarId(), materiaId, frente: frente.trim().slice(0, 500), verso: verso.trim().slice(0, 2000) };
         set((s) => ({ cartoes: [...s.cartoes, deCard(base, createEmptyCard(new Date()))] }));
       },

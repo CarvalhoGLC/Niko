@@ -84,7 +84,7 @@ export function imprimirMes(mes: Date, aoFalhar: () => void) {
     .filter(Boolean)
     .join("");
 
-  const foto = cfg.foto ? `<img class="foto" src="${cfg.foto}" alt="">` : `<span class="foto letra">${e((cfg.nome || "N").slice(0, 1).toUpperCase())}</span>`;
+  const foto = cfg.foto && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(cfg.foto) ? `<img class="foto" src="${e(cfg.foto)}" alt="">` : `<span class="foto letra">${e((cfg.nome || "N").slice(0, 1).toUpperCase())}</span>`;
   const titulo = formatarData(inicio, "MMMM yyyy");
   const css = `
   @page { size: A4 portrait; margin: 12mm 12mm 14mm; }

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { AnimatePresence } from "motion/react";
 import { Ilha } from "../janelas/ilha/Ilha";
 import { Dock } from "../janelas/dock/Dock";
+import { AssistiveTouch } from "../janelas/assistive/AssistiveTouch";
 import { JanelaSistema } from "../janelas/sistema/JanelaSistema";
 import { JanelaConexao } from "../modulos/conexoes/JanelaConexao";
 import { BuscaGlobal } from "../modulos/busca/BuscaGlobal";
@@ -12,12 +13,16 @@ import { useConfig } from "../estado/configuracoes";
 import { usarTema } from "../janelas/area-de-trabalho/usarTema";
 import { usarAtalhos } from "../janelas/area-de-trabalho/usarAtalhos";
 import { useServicos } from "../servicos/servicos";
-import { janelaAtual, ouvirComandos, ouvirEvento, sincronizarInicioComWindows } from "./desktop";
+import { usarPreferenciasDaJanela } from "../servicos/usarPreferenciasDaJanela";
+import { definirMonitorDaIlha, janelaAtual, ouvirComandos, ouvirEvento, sincronizarInicioComWindows } from "./desktop";
 import { usarSincronia } from "./sincronia";
+import { usarAtalhosDaIlha, usarAtalhosGlobais } from "./usarAtalhosGlobais";
 
 export function AppSistema() {
   usarTema();
+  usarPreferenciasDaJanela();
   usarAtalhos();
+  usarAtalhosGlobais();
   usarSincronia();
   const janelas = useInterface((s) => s.janelasConexao);
   const primeira = useConfig((s) => s.primeiraExecucaoFeita);
@@ -46,7 +51,7 @@ export function AppSistema() {
   }, []);
 
   return (
-    <div className="area-trabalho area-nativa">
+    <div className="area-trabalho area-nativa estilo-sistema">
       <JanelaSistema />
       <AnimatePresence>
         {janelas.filter((j) => !j.minimizada).map((j) => (
@@ -67,10 +72,19 @@ function usarMostrarAoMontar() {
   }, []);
 }
 
+function usarMonitorDaIlha() {
+  const monitor = useConfig((s) => s.ilha.monitor);
+  useEffect(() => {
+    void definirMonitorDaIlha(monitor);
+  }, [monitor]);
+}
+
 export function AppIlha() {
   usarMostrarAoMontar();
+  usarMonitorDaIlha();
   usarTema();
   usarSincronia();
+  usarAtalhosDaIlha();
   useServicos();
   return (
     <div className="area-sobreposta">
@@ -82,10 +96,23 @@ export function AppIlha() {
 export function AppDock() {
   usarMostrarAoMontar();
   usarTema();
+  usarPreferenciasDaJanela();
   usarSincronia();
   return (
     <div className="area-sobreposta">
       <Dock />
     </div>
   );
+}
+
+export function AppAssistive() {
+  usarTema();
+  usarSincronia();
+  const ativo = useConfig((s) => s.assistive.ativo);
+  useEffect(() => {
+    let vivo = true;
+    void janelaAtual().then((j) => { if (vivo) return ativo ? j.show() : j.hide(); }).catch(() => undefined);
+    return () => { vivo = false; };
+  }, [ativo]);
+  return <div className="area-sobreposta"><AssistiveTouch /></div>;
 }

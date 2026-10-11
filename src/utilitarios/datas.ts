@@ -68,7 +68,8 @@ export function horarioRelativo(iso: string): string {
 }
 
 export function diaDoMomento(iso: string): string {
-  return paraISO(new Date(iso));
+  const momento = new Date(iso);
+  return paraISO(viradaAs4h && momento.getHours() < 4 ? addDays(momento, -1) : momento);
 }
 
 export function mesISO(texto: string): string {

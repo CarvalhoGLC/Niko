@@ -1,11 +1,12 @@
-import type { AgenteId, CartaoConfirmacao } from "../tipos";
+import type { AgenteId, CartaoConfirmacao, Repeticao } from "../tipos";
+import { extrairRepeticao } from "./itensDoCalendario";
 import { T } from "../textos/textos";
 import { interpretarQuando } from "./linguagem";
 import { lerValorEmCentavos, formatarDinheiro } from "./dinheiro";
 import { normalizarTexto, urlSegura } from "./basicos";
 import { formatar, hojeISO } from "./datas";
 import { useRotina, tarefasDoDia, habitoCumprido } from "../estado/rotina";
-import { useFinancas, gastosDoMes, parteDoUsuario, EU } from "../estado/financas";
+import { useFinancas, gastosDoMes, parteDoUsuario, EU, valorEmReais } from "../estado/financas";
 import { useEstudos, revisoesParaHoje } from "../estado/estudos";
 import { usePomodoro } from "../estado/pomodoro";
 import { useConfig } from "../estado/configuracoes";
@@ -181,6 +182,14 @@ function semConectores(texto: string): string {
   return texto.replace(/^(?:(?:de|que|para|pra|pro|o|a)\s+)+/i, "").trim();
 }
 
+function repeticaoDoCartao(valor: unknown): Repeticao {
+  return valor === "diaria" || valor === "semanal" || valor === "mensal" ? valor : "nenhuma";
+}
+
+function descreverComRepeticao(quando: string, repeticao: Repeticao): string {
+  return repeticao === "nenhuma" ? quando : `${quando}, ${T.calendario.repeticoes[repeticao].toLowerCase()}`;
+}
+
 export function nomeDaCategoriaDoCartao(c: CartaoConfirmacao): string {
   const nova = String(c.dados.novaCategoria ?? "").trim();
   return categoriaDoCartao(c)?.nome ?? (nova ? T.chat.respostas.categoriaNova(nova) : T.financas.semCategoria);
@@ -196,11 +205,18 @@ export function linhasDaConfirmacao(c: CartaoConfirmacao): [string, string][] {
   const fin = useFinancas.getState();
   switch (c.tipo) {
     case "tarefa":
-    case "lembrete":
-    case "evento":
       return [[R.titulo, String(d.titulo)], ...quando()];
+    case "lembrete":
+    case "evento": {
+      const repeticao = repeticaoDoCartao(d.repeticao);
+      return [[R.titulo, String(d.titulo)], ...quando(), ...(repeticao !== "nenhuma" ? ([[R.repete, T.calendario.repeticoes[repeticao]]] as [string, string][]) : [])];
+    }
+    case "novoHabito":
+      return [[R.habito, String(d.nome)], ...(d.hora ? ([[R.hora, String(d.hora)]] as [string, string][]) : []), ...(Number(d.meta) > 1 ? ([[R.meta, `${d.meta} ${d.unidade ?? ""}`.trim()]] as [string, string][]) : [])];
     case "concluir":
       return [[R.tarefa, String(d.titulo)]];
+    case "eventoFeito":
+      return [[R.titulo, String(d.titulo)], [R.data, formatar(String(d.data), "EEE, d 'de' MMM")]];
     case "habito":
       return [[R.habito, String(d.nome)], ...(Number(d.valor) > 1 ? ([[R.valor, String(d.valor)]] as [string, string][]) : []), [R.data, formatar(String(d.data), "d 'de' MMM")]];
     case "compra":
@@ -247,9 +263,25 @@ export function confirmarComando(c: CartaoConfirmacao): string | Promise<string>
   }
   if (c.tipo === "evento") {
     const titulo = String(d.titulo);
-    useOrganizacao.getState().criarEvento({ titulo, data: String(d.data), hora: d.hora ? String(d.hora) : undefined, tipo: "evento", repeticao: "nenhuma" });
+    const repeticao = repeticaoDoCartao(d.repeticao);
+    useOrganizacao.getState().criarEvento({ titulo, data: String(d.data), hora: d.hora ? String(d.hora) : undefined, tipo: "evento", repeticao });
     void useAgentes.getState().trabalhar("organizador", titulo, 400);
-    return T.chat.respostas.evento(titulo, descreverQuando(String(d.data), d.hora ? String(d.hora) : undefined));
+    return T.chat.respostas.evento(titulo, descreverComRepeticao(descreverQuando(String(d.data), d.hora ? String(d.hora) : undefined), repeticao));
+  }
+  if (c.tipo === "novoHabito") {
+    const nome = String(d.nome).trim().slice(0, 60);
+    const rotina = useRotina.getState();
+    if (rotina.habitos.some((h) => !h.arquivado && h.nome.toLowerCase() === nome.toLowerCase())) return T.chat.respostas.habitoJaExiste(nome);
+    const meta = Math.max(1, Math.round(Number(d.meta) || 1));
+    rotina.criarHabito({ nome, tipo: meta > 1 ? "quantidade" : "sim_nao", meta, unidade: String(d.unidade ?? "").slice(0, 20), hora: d.hora ? String(d.hora) : undefined });
+    void useAgentes.getState().trabalhar("organizador", nome, 400);
+    return T.chat.respostas.habitoCriado(nome, d.hora ? String(d.hora) : "");
+  }
+  if (c.tipo === "eventoFeito") {
+    if (!useOrganizacao.getState().eventos.some((e) => e.id === d.id)) return T.chat.respostas.naoAchei;
+    useOrganizacao.getState().marcarEventoFeito(String(d.id), String(d.data), true);
+    void useAgentes.getState().trabalhar("organizador", String(d.titulo), 300);
+    return T.chat.respostas.eventoFeito(String(d.titulo));
   }
   if (c.tipo === "concluir") {
     if (!useRotina.getState().tarefas.some((t) => t.id === d.id)) return T.chat.respostas.naoAchei;
@@ -283,9 +315,10 @@ export function confirmarComando(c: CartaoConfirmacao): string | Promise<string>
   if (c.tipo === "lembrete") {
     const titulo = String(d.titulo);
     const data = String(d.data);
-    useOrganizacao.getState().criarEvento({ titulo, data, hora: d.hora ? String(d.hora) : undefined, tipo: "lembrete", repeticao: "nenhuma" });
+    const repeticao = repeticaoDoCartao(d.repeticao);
+    useOrganizacao.getState().criarEvento({ titulo, data, hora: d.hora ? String(d.hora) : undefined, tipo: "lembrete", repeticao });
     void useAgentes.getState().trabalhar("organizador", titulo, 400);
-    return T.chat.respostas.lembrete(titulo, descreverQuando(data, d.hora ? String(d.hora) : undefined));
+    return T.chat.respostas.lembrete(titulo, descreverComRepeticao(descreverQuando(data, d.hora ? String(d.hora) : undefined), repeticao));
   }
   if (faltaCategoria(c)) return T.chat.respostas.faltaCategoria;
   if (c.tipo === "gasto" || c.tipo === "receita") {
@@ -413,7 +446,8 @@ export function executarComando(entrada: string, opcoes: { confirmar?: boolean }
       return { agente: "tutor", resposta: T.chat.respostas.link(url.hostname), ok: true };
     }
     case "lembrete": {
-      const quando = interpretarQuando(argumentos);
+      const { repeticao, resto: semRepeticao } = extrairRepeticao(argumentos);
+      const quando = interpretarQuando(semRepeticao);
       if (!quando.hora && !quando.data) return { agente: "organizador", resposta: T.chat.respostas.faltaHora, ok: false };
       const titulo = semConectores(quando.resto).slice(0, 200);
       if (!titulo) return { agente: "organizador", resposta: T.chat.respostas.faltaTitulo, ok: false };
@@ -423,10 +457,10 @@ export function executarComando(entrada: string, opcoes: { confirmar?: boolean }
           agente: "organizador",
           resposta: T.chat.respostas.lembreteConferir,
           ok: true,
-          confirmacao: { tipo: "lembrete", situacao: "pendente", dados: { titulo, data, hora: quando.hora ?? "" } },
+          confirmacao: { tipo: "lembrete", situacao: "pendente", dados: { titulo, data, hora: quando.hora ?? "", ...(repeticao !== "nenhuma" ? { repeticao } : {}) } },
         };
-      useOrganizacao.getState().criarEvento({ titulo, data, hora: quando.hora, tipo: "lembrete", repeticao: "nenhuma" });
-      const descricao = descreverQuando(data, quando.hora);
+      useOrganizacao.getState().criarEvento({ titulo, data, hora: quando.hora, tipo: "lembrete", repeticao });
+      const descricao = descreverComRepeticao(descreverQuando(data, quando.hora), repeticao);
       void agentes.trabalhar("organizador", T.chat.respostas.lembrete(titulo, descricao), 400);
       return { agente: "organizador", resposta: T.chat.respostas.lembrete(titulo, descricao), ok: true };
     }
@@ -441,7 +475,7 @@ export function executarComando(entrada: string, opcoes: { confirmar?: boolean }
       const abertas = tarefasDoDia(rotina.tarefas, hoje).filter((t) => t.status !== "concluida" && t.status !== "cancelada").length;
       const pendentes = rotina.habitos.filter((h) => !h.arquivado && !habitoCumprido(h, rotina.registros[hoje]?.[h.id])).length;
       const fin = useFinancas.getState();
-      const gasto = somar(gastosDoMes(fin, hoje.slice(0, 7)), (t) => parteDoUsuario(t, fin.divisoes));
+      const gasto = somar(gastosDoMes(fin, hoje.slice(0, 7)), (t) => valorEmReais(t, fin, parteDoUsuario(t, fin.divisoes)));
       return {
         agente: "organizador",
         resposta: T.chat.respostas.status({

@@ -1,8 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { useConfig } from "../../estado/configuracoes";
-import { comAlfa, hexValido, textoSobre } from "../../utilitarios/cores";
+import { comAlfa, contraste, hexValido, textoSobre } from "../../utilitarios/cores";
 
 export const DESTAQUE_PADRAO = { claro: "#7c5ce0", escuro: "#a78bfa" };
+export const DESTAQUE_SISTEMA = "#ff3b47";
+
+function textoSobreBotao(cor: string) {
+  return contraste(cor, "#ffffff") >= 2.4 ? "#ffffff" : "#111111";
+}
 
 export function usarTema() {
   const tema = useConfig((s) => s.tema);
@@ -21,18 +26,22 @@ export function usarTema() {
     return () => consulta.removeEventListener("change", aoMudar);
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const efetivo = tema === "sistema" ? (sistemaEscuro ? "escuro" : "claro") : tema;
     const raiz = document.documentElement;
     raiz.dataset.tema = efetivo;
     raiz.dataset.paleta = paleta;
     raiz.dataset.reduzirAnimacoes = reduzir ? "sim" : "nao";
     raiz.dataset.privacidade = privacidade ? "sim" : "nao";
-    const cor = destaque && hexValido(destaque) ? destaque : DESTAQUE_PADRAO[efetivo];
+    const escolhida = destaque && hexValido(destaque) ? destaque : null;
+    const cor = escolhida ?? DESTAQUE_PADRAO[efetivo];
+    const corDoSistema = escolhida ?? DESTAQUE_SISTEMA;
     raiz.style.setProperty("--destaque", cor);
     raiz.style.setProperty("--destaque-texto", textoSobre(cor));
     raiz.style.setProperty("--destaque-suave", comAlfa(cor, efetivo === "escuro" ? 0.18 : 0.12));
     raiz.style.setProperty("--foco", comAlfa(cor, 0.32));
+    raiz.style.setProperty("--destaque-sistema", corDoSistema);
+    raiz.style.setProperty("--destaque-sistema-sobre", textoSobreBotao(corDoSistema));
     raiz.style.setProperty("--escala", String(escala));
   }, [tema, paleta, destaque, escala, reduzir, privacidade, sistemaEscuro]);
 }

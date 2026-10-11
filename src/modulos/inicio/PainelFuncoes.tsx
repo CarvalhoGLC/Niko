@@ -1,5 +1,5 @@
 import { BookOpen, CalendarDays, GraduationCap, Target, Wallet, type LucideIcon } from "lucide-react";
-import { Alternador, Modal } from "../../componentes/basicos";
+import { Alternador, Botao, Modal } from "../../componentes/basicos";
 import { useConfig } from "../../estado/configuracoes";
 import { FUNCOES, type Funcao } from "../../utilitarios/funcoes";
 import { tocarSom } from "../../ponte/sons";
@@ -24,22 +24,28 @@ export function PainelFuncoes({ aberto, aoFechar }: { aberto: boolean; aoFechar:
 
   return (
     <Modal aberto={aberto} titulo={T.funcoes.titulo} aoFechar={aoFechar}>
-      <p className="campo-dica" style={{ marginBottom: 12 }}>{T.funcoes.dica}</p>
-      <div className="lista">
+      <p className="inicio-modal-dica">{T.funcoes.dica}</p>
+      <div className="inicio-opcoes">
         {FUNCOES.map((f) => {
           const Icone = ICONE_FUNCAO[f];
           const ligada = !desligadas.includes(f);
           return (
-            <div key={f} className="lista-item" data-desligada={!ligada || undefined}>
-              <Icone size={16} />
-              <span className="coluna lista-item-principal" style={{ gap: 2, minWidth: 0 }}>
-                <span>{T.funcoes.nomes[f]}</span>
-                <span className="campo-dica">{T.funcoes.descricoes[f]}</span>
+            <div key={f} className="inicio-opcao inicio-opcao-funcao" data-desligada={!ligada || undefined}>
+              <span className="inicio-opcao-icone"><Icone size={16} /></span>
+              <span className="inicio-opcao-texto">
+                <span className="inicio-opcao-titulo">
+                  {T.funcoes.nomes[f]}
+                  {!ligada && <span className="inicio-opcao-selo">{T.funcoes.desligada}</span>}
+                </span>
+                <span className="inicio-opcao-descricao">{T.funcoes.descricoes[f]}</span>
               </span>
               <Alternador ligado={ligada} rotulo={T.funcoes.nomes[f]} aoMudar={(v) => alternar(f, v)} />
             </div>
           );
         })}
+      </div>
+      <div className="formulario-acoes">
+        <Botao variante="primario" onClick={aoFechar}>{T.inicio.pronto}</Botao>
       </div>
     </Modal>
   );

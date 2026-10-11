@@ -1,11 +1,12 @@
 import {
   siStripe, siGithub, siVercel, siResend, siNotion, siCaldotcom, siN8n, siAnthropic, siOllama,
-  siNvidia, siOpencode, siQwen, siGooglegemini, siOpenrouter, siMistralai, siHuggingface, siDeepseek, siLmstudio, siGmail, siSupabase, siCloudflare, siClaudecode, siGithubcopilot, siKimi,
+  siNvidia, siOpencode, siQwen, siGooglegemini, siOpenrouter, siMistralai, siHuggingface, siDeepseek, siLmstudio, siGmail, siGooglecalendar, siGoogle, siGoogledrive, siGoogletasks, siSupabase, siCloudflare, siClaudecode, siGithubcopilot, siKimi,
   siSpotify, siGooglechrome, siFirefoxbrowser, siZenbrowser, siYoutube, siYoutubemusic, siDeezer, siApplemusic, siTidal, siSoundcloud,
 } from "simple-icons";
 import type { ServicoId } from "../tipos";
 import logoCodex from "./lobe/codex.svg";
 import logoAntigravity from "./lobe/antigravity.svg";
+import logoAmp from "./lobe/amp.svg";
 
 interface IconeMarca {
   title: string;
@@ -13,14 +14,19 @@ interface IconeMarca {
   hex: string;
 }
 
-export type MarcaId = ServicoId | "anthropic" | "ollama" | "nvidia" | "opencode" | "qwen" | "gemini" | "openrouter" | "mistral" | "huggingface" | "deepseek" | "lmstudio" | "claudecode" | "copilot" | "kimi" | MarcaDeMidia | MarcaColorida;
+export type MarcaId = ServicoId | "gmail" | "agenda" | "drive" | "tarefasGoogle" | "anthropic" | "ollama" | "nvidia" | "opencode" | "qwen" | "gemini" | "openrouter" | "mistral" | "huggingface" | "deepseek" | "lmstudio" | "claudecode" | "copilot" | "kimi" | MarcaDeMidia | MarcaColorida;
 
-export type MarcaColorida = "codex" | "antigravity";
+export type MarcaColorida = "codex" | "antigravity" | "amp";
 
 const MARCAS_COLORIDAS: Record<MarcaColorida, { title: string; url: string }> = {
   codex: { title: "Codex", url: logoCodex },
   antigravity: { title: "Antigravity", url: logoAntigravity },
+  amp: { title: "Amp", url: logoAmp },
 };
+
+function ehColorida(marca: MarcaId): marca is MarcaColorida {
+  return Object.hasOwn(MARCAS_COLORIDAS, marca);
+}
 
 export type MarcaDeMidia = "spotify" | "chrome" | "firefox" | "zen" | "youtube" | "youtubemusic" | "deezer" | "applemusic" | "tidal" | "soundcloud";
 
@@ -49,7 +55,11 @@ export const MARCAS: Record<Exclude<MarcaId, MarcaColorida>, IconeMarca> = {
   notion: siNotion,
   calcom: siCaldotcom,
   n8n: siN8n,
+  google: siGoogle,
   gmail: siGmail,
+  agenda: siGooglecalendar,
+  drive: siGoogledrive,
+  tarefasGoogle: siGoogletasks,
   supabase: siSupabase,
   cloudflare: siCloudflare,
   anthropic: siAnthropic,
@@ -93,7 +103,7 @@ interface Props {
 }
 
 export function Marca({ marca, tamanho = 18, monocromatica = false }: Props) {
-  if (marca === "codex" || marca === "antigravity") {
+  if (ehColorida(marca)) {
     const colorida = MARCAS_COLORIDAS[marca];
     return <img src={colorida.url} alt={colorida.title} width={tamanho} height={tamanho} draggable={false} style={{ flex: "0 0 auto", filter: monocromatica ? "grayscale(1) brightness(1.4)" : undefined }} />;
   }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { usarMovimentoReduzido } from "./usarMovimentoReduzido";
 import { Personagem } from "../../../personagens/Personagem";
@@ -6,7 +6,10 @@ import { AGENTES } from "../../../estado/agentes";
 import { useConfig } from "../../../estado/configuracoes";
 import { tocarSom } from "../../../ponte/sons";
 import { liberarSistemaInicial } from "../../../desktop/desktop";
-import { saudacao } from "../../../utilitarios/datas";
+import { useInterface } from "../../../estado/interface";
+import { temNovidadesDe } from "../../../utilitarios/novidades";
+import { hojeISO, saudacao } from "../../../utilitarios/datas";
+import { habitoCumprido, tarefasDoDia, useRotina } from "../../../estado/rotina";
 import { T } from "../../../textos/textos";
 import type { AgenteId } from "../../../tipos";
 import "./saudacao.css";
@@ -86,27 +89,57 @@ function Integrante({ agente, indice, fase, reduzido }: { agente: AgenteId; indi
   );
 }
 
+function resumoDeHoje(): { tarefas: number; habitos: number } {
+  const { tarefas, habitos, registros } = useRotina.getState();
+  const hoje = hojeISO();
+  const pendentes = tarefasDoDia(tarefas, hoje).filter((t) => t.status !== "concluida" && t.status !== "cancelada").length;
+  const habitosPendentes = habitos.filter((h) => !h.arquivado && !habitoCumprido(h, registros[hoje]?.[h.id])).length;
+  return { tarefas: pendentes, habitos: habitosPendentes };
+}
+
 export function Saudacao({ versaoNova, aoTerminar }: { versaoNova?: string; aoTerminar: () => void }) {
   const nome = useConfig((s) => s.nome.trim().split(/\s+/)[0] ?? "");
   const reduzido = usarMovimentoReduzido();
   const [fase, setFase] = useState<Fase>("entrada");
   const [titulo] = useState(() => T.ilha.saudacao.titulo(saudacao(), nome));
+  const [subtitulo] = useState(() => (versaoNova ? T.ilha.saudacao.atualizado(versaoNova) : T.ilha.saudacao.hoje(resumoDeHoje())));
   const saindo = fase === "saida";
-  const subtitulo = versaoNova ? T.ilha.saudacao.atualizado(versaoNova) : T.ilha.saudacao.equipe;
+  const sair = useRef<() => void>(() => undefined);
 
   useEffect(() => {
-    const som = window.setTimeout(() => void tocarSom("greet", "personagens"), INICIO_DA_QUEDA * 1000);
-    const onda = window.setTimeout(() => void tocarSom("proud", "personagens"), INICIO_DA_ONDA * 1000);
-    const saida = window.setTimeout(() => {
+    const silenciosa = useConfig.getState().naoPerturbe;
+    let encerrando = false;
+    const relogios: number[] = [];
+    const encerrar = () => {
+      if (encerrando) return;
+      encerrando = true;
+      relogios.forEach((t) => window.clearTimeout(t));
       setFase("saida");
       void liberarSistemaInicial();
-    }, SAIDA_MS);
-    const fim = window.setTimeout(aoTerminar, FIM_MS);
-    return () => [som, onda, saida, fim].forEach((t) => window.clearTimeout(t));
-  }, [aoTerminar]);
+      if (versaoNova && temNovidadesDe(versaoNova)) useInterface.getState().irPara("atualizacao", { secao: "novidades" });
+      relogios.push(window.setTimeout(aoTerminar, FIM_MS - SAIDA_MS));
+    };
+    sair.current = encerrar;
+    if (!silenciosa) {
+      relogios.push(window.setTimeout(() => void tocarSom("greet", "personagens"), INICIO_DA_QUEDA * 1000));
+      relogios.push(window.setTimeout(() => void tocarSom("proud", "personagens"), INICIO_DA_ONDA * 1000));
+    }
+    relogios.push(window.setTimeout(encerrar, SAIDA_MS));
+    return () => relogios.forEach((t) => window.clearTimeout(t));
+  }, [aoTerminar, versaoNova]);
 
   return (
-    <motion.div className="saudacao" role="status" aria-label={`${titulo}. ${subtitulo}`} initial={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.2 } }}>
+    <motion.div
+      className="saudacao"
+      role="button"
+      tabIndex={0}
+      aria-label={`${titulo}. ${subtitulo}. ${T.ilha.saudacao.pular}`}
+      title={T.ilha.saudacao.pular}
+      onClick={() => sair.current()}
+      onKeyDown={(e) => (e.key === "Escape" || e.key === "Enter" || e.key === " ") && sair.current()}
+      initial={{ opacity: 1 }}
+      exit={{ opacity: 0, transition: { duration: 0.2 } }}
+    >
       <div className="saudacao-fundo" aria-hidden="true">
         {!reduzido && (
           <>

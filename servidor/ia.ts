@@ -2,7 +2,8 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync } from "
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { lerSegredo, gravarSegredo, apagarSegredo } from "./segredos";
+import { lerSegredo, gravarSegredo, apagarSegredo } from "./segredos.ts";
+import { criarFiltroDePensamento } from "./pensamento.ts";
 
 export type TipoProvedor = "anthropic" | "openai_compativel";
 
@@ -236,6 +237,8 @@ async function* linhasSse(corpo: ReadableStream<Uint8Array>) {
     resto = partes.pop() ?? "";
     for (const linha of partes) if (linha.startsWith("data:")) yield linha.slice(5).trim();
   }
+  resto += decodificador.decode();
+  if (resto.startsWith("data:")) yield resto.slice(5).trim();
 }
 
 export async function* conversar(provedorId: string, sistema: string, mensagens: MensagemIa[], modelo: string | undefined, sinal: AbortSignal, ferramentas: Ferramenta[] = []): AsyncGenerator<Evento> {
@@ -278,7 +281,7 @@ export async function* conversar(provedorId: string, sistema: string, mensagens:
             model: modeloFinal,
             max_tokens: 4096,
             system: sistema,
-            messages: historicoAnthropic(usar ? validas : validas.filter((m) => m.papel !== "ferramenta")),
+            messages: historicoAnthropic(usar ? validas : validas.filter((m) => m.papel !== "ferramenta").map((m) => ({ ...m, chamadas: undefined }))),
             stream: true,
             ...(usar ? { tools: ferramentas.map((f) => ({ name: f.nome, description: f.descricao, input_schema: f.parametros })) } : {}),
           }),
@@ -319,6 +322,7 @@ export async function* conversar(provedorId: string, sistema: string, mensagens:
     let teveTexto = false;
     let teveRaciocinio = false;
     let cortado = false;
+    const pensamento = criarFiltroDePensamento();
     armar(60000);
     for await (const dado of linhasSse(resposta.body)) {
       armar(60000);
@@ -358,8 +362,12 @@ export async function* conversar(provedorId: string, sistema: string, mensagens:
       } else {
         const escolha = (json.choices as { finish_reason?: string | null; delta?: { content?: string; reasoning_content?: string; reasoning?: string; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] } }[] | undefined)?.[0];
         if (escolha?.delta?.content) {
-          yield { tipo: "texto", texto: escolha.delta.content };
-          teveTexto = true;
+          const visivel = pensamento.receber(escolha.delta.content);
+          if (pensamento.pensou()) teveRaciocinio = true;
+          if (visivel) {
+            yield { tipo: "texto", texto: visivel };
+            teveTexto = true;
+          }
         }
         if (escolha?.delta?.reasoning_content || escolha?.delta?.reasoning) teveRaciocinio = true;
         if (escolha?.finish_reason === "length") cortado = true;
@@ -377,6 +385,11 @@ export async function* conversar(provedorId: string, sistema: string, mensagens:
           saida = uso.completion_tokens ?? saida;
         }
       }
+    }
+    const restoVisivel = pensamento.terminar();
+    if (restoVisivel) {
+      yield { tipo: "texto", texto: restoVisivel };
+      teveTexto = true;
     }
     for (const [indice, c] of [...chamadasCompativel.entries()].sort((a, b) => a[0] - b[0])) {
       if (c.nome) yield { tipo: "ferramenta", chamada: { id: c.id || `chamada_${indice}_${randomUUID().slice(0, 6)}`, nome: c.nome, argumentos: lerArgumentos(c.json) } };

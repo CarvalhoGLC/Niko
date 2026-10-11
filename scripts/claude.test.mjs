@@ -17,7 +17,53 @@ globalThis.localStorage ??= { getItem: (k) => memoriaLocal.get(k) ?? null, setIt
 
 const vite = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", optimizeDeps: { noDiscovery: true } });
 const claude = await vite.ssrLoadModule("/servidor/claude.ts");
+const processosVistos = [];
+const focados = [];
+claude.buscaDeProcesso.dono = async (portaCliente) => {
+  processosVistos.push(portaCliente);
+  return 4242;
+};
+claude.buscaDeProcesso.focar = async (pid) => {
+  focados.push(pid);
+  return { ok: true };
+};
 const { useClaudeCode } = await vite.ssrLoadModule("/src/estado/claudeCode.ts");
+const { indicadorDePermissoes } = await vite.ssrLoadModule("/src/janelas/ilha/claude/indicadorDePermissoes.ts");
+
+test("modo sem confirmação recente fica identificado como último modo conhecido", () => {
+  const agora = Date.now();
+  const data = new Date(agora).toISOString();
+  const base = { sessao: "modo-teste", cwd: "", ferramenta: "claude", recebidoEm: data };
+  const aplicar = useClaudeCode.getState().aplicar;
+  aplicar({ ...base, id: "modo-1", evento: "SessionStart", dados: { permission_mode: "default" } });
+  assert.equal(indicadorDePermissoes(useClaudeCode.getState().sessoes[base.sessao], agora).texto, "Modo: Manual");
+  aplicar({ ...base, id: "modo-2", evento: "PreToolUse", dados: { tool_name: "Read" } });
+  assert.equal(indicadorDePermissoes(useClaudeCode.getState().sessoes[base.sessao], agora).texto, "Último modo: Manual");
+  aplicar({ ...base, id: "modo-3", evento: "PreToolUse", dados: { tool_name: "Read", permission_mode: "auto" } });
+  assert.equal(indicadorDePermissoes(useClaudeCode.getState().sessoes[base.sessao], agora).texto, "Modo: Automático");
+  assert.equal(indicadorDePermissoes(useClaudeCode.getState().sessoes[base.sessao], agora + 90000).texto, "Último modo: Automático");
+});
+
+test("reiniciar sessão sem modo não reaproveita permissão antiga", () => {
+  const recebidoEm = new Date().toISOString();
+  const base = { sessao: "modo-reinicio", cwd: "", ferramenta: "claude", recebidoEm };
+  useClaudeCode.getState().aplicar({ ...base, id: "modo-reinicio-1", evento: "SessionStart", dados: { permission_mode: "auto" } });
+  useClaudeCode.getState().aplicar({ ...base, id: "modo-reinicio-2", evento: "SessionStart", dados: {} });
+  assert.equal(indicadorDePermissoes(useClaudeCode.getState().sessoes[base.sessao], Date.now()).texto, "Modo não informado");
+});
+
+test("evento antigo não sobrescreve modo mais recente", () => {
+  const agora = Date.now();
+  const base = { sessao: "modo-atrasado", cwd: "", ferramenta: "claude", evento: "PreToolUse" };
+  useClaudeCode.getState().aplicar({ ...base, id: "modo-atrasado-1", recebidoEm: new Date(agora).toISOString(), dados: { permission_mode: "auto", tool_name: "Read" } });
+  useClaudeCode.getState().aplicar({ ...base, id: "modo-atrasado-2", recebidoEm: new Date(agora - 1000).toISOString(), dados: { permission_mode: "default", tool_name: "Read" } });
+  assert.equal(useClaudeCode.getState().sessoes[base.sessao].modo, "auto");
+});
+
+test("modo desconhecido ou data inválida não inventa confirmação", () => {
+  assert.equal(indicadorDePermissoes({ modo: "inventado" }, Date.now()).texto, "Modo não informado");
+  assert.equal(indicadorDePermissoes({ modo: "auto", modoAtualizadoEm: "inválida", modoConfirmado: true }, Date.now()).texto, "Último modo: Automático");
+});
 const pastaClaude = join(raizTemporaria, ".claude");
 const settings = join(pastaClaude, "settings.json");
 const lerSettings = () => JSON.parse(readFileSync(settings, "utf8"));
@@ -30,6 +76,7 @@ before(async () => {
   servidor = criarServidorHttp((req, res) => {
     const url = new URL(req.url, "http://localhost");
     if (url.pathname === "/ponte/claude/evento") return void claude.receberEventoDoGancho(req, res);
+    if (url.pathname === "/ponte/claude/status") return void claude.receberStatusDoClaude(req, res);
     if (url.pathname === "/ponte/claude/eventos") return void claude.ouvirEventos(req, res);
     res.statusCode = 404;
     res.end();
@@ -54,7 +101,7 @@ test("instala os ganchos num settings.json que ainda não existe", () => {
     assert.equal(gancho.type, "http");
     assert.equal(gancho.url, "http://127.0.0.1:47999/ponte/claude/evento");
     assert.equal(gancho.headers["x-niko-gancho"], segredo());
-    assert.equal(gancho.timeout, evento === "PermissionRequest" ? 120 : 5);
+    assert.equal(gancho.timeout, evento === "PermissionRequest" ? 120 : 2);
   }
   assert.equal(claude.estadoDaInstalacao().instalado, true);
 });
@@ -73,6 +120,24 @@ test("preserva o que já existia, faz cópia e não duplica ao reinstalar", () =
   assert.equal(dados.hooks.Stop[0].hooks[0].command, "echo fim");
   assert.equal(dados.hooks.PreToolUse[0].matcher, "Bash");
   assert.equal(dados.hooks.PreToolUse.filter((g) => g.hooks.some((h) => h.type === "http")).length, 1);
+});
+
+test("status line: entra junto com os ganchos, guarda a antiga e devolve ela ao remover", () => {
+  const antes = lerSettings();
+  writeFileSync(settings, JSON.stringify({ ...antes, statusLine: { type: "command", command: "minha-status.sh", padding: 2 } }, null, 2));
+  claude.instalarGanchos({ confirmacao: "INSTALAR" });
+  claude.instalarGanchos({ confirmacao: "INSTALAR" });
+  const instalado = lerSettings();
+  assert.match(instalado.statusLine.command, /status-claude-niko\.mjs/);
+  assert.equal(instalado.statusLine.padding, 2);
+  assert.equal(claude.estadoDaInstalacao().desatualizado, false);
+  claude.removerGanchos({ confirmacao: "REMOVER" });
+  assert.deepEqual(lerSettings().statusLine, { type: "command", command: "minha-status.sh", padding: 2 });
+  writeFileSync(settings, JSON.stringify(antes, null, 2));
+  claude.instalarGanchos({ confirmacao: "INSTALAR" });
+  claude.removerGanchos({ confirmacao: "REMOVER" });
+  assert.equal(lerSettings().statusLine, undefined);
+  claude.instalarGanchos({ confirmacao: "INSTALAR" });
 });
 
 test("remover tira só as entradas do Niko", () => {
@@ -117,6 +182,23 @@ test("sem a ilha ouvindo, o pedido de permissão volta vazio na hora", async () 
   assert.equal(await r.text(), "");
 });
 
+test("status exige segredo e ausência de Origin, transmite apenas métricas da sessão correta", async () => {
+  const dados = { session_id: "status-segura", context_window: { total_input_tokens: 42 }, cost: { total_cost_usd: 0.1 }, prompt: "privado", cwd: "C:/Privado", transcript_path: "C:/privado.jsonl" };
+  const enviarStatus = (headers) => fetch(`${base}/ponte/claude/status`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(dados) });
+  assert.equal((await enviarStatus({})).status, 403);
+  assert.equal((await enviarStatus({ "x-niko-gancho": segredo(), origin: "http://malicioso" })).status, 403);
+  assert.equal((await enviarStatus({ "x-niko-gancho": segredo() })).status, 200);
+  const controle = new AbortController();
+  try {
+    const fluxo = await fetch(`${base}/ponte/claude/eventos`, { signal: controle.signal });
+    const leitor = fluxo.body.getReader(); let texto = "";
+    while (!texto.includes("NikoConectado")) texto += new TextDecoder().decode((await leitor.read()).value);
+    const evento = texto.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.evento === "NikoMetadadosSessao" && e.sessao === dados.session_id);
+    assert.equal(evento.dados.metricas.entrada, 42); assert.equal(evento.cwd, "");
+    assert.doesNotMatch(JSON.stringify(evento), /privado|Privado|transcript_path|prompt/);
+  } finally { controle.abort(); }
+});
+
 test("com a ilha ouvindo, Permitir devolve a decisão no formato documentado", async () => {
   const controle = new AbortController();
   const fluxo = await fetch(`${base}/ponte/claude/eventos`, { signal: controle.signal });
@@ -146,7 +228,7 @@ test("com a ilha ouvindo, Permitir devolve a decisão no formato documentado", a
 });
 
 test("descarta campos enormes e recorta textos longos", async () => {
-  const r = await enviar({ hook_event_name: "PreToolUse", session_id: "s3", tool_name: "Read", tool_input: { file_path: "a.ts" }, tool_response: "x".repeat(50000), transcript_path: "C:\\segredo.jsonl", extra: "y".repeat(9000) }, { "x-niko-gancho": segredo() });
+  const r = await enviar({ hook_event_name: "PreToolUse", session_id: "s3", tool_name: "Read", tool_input: { file_path: "a.ts" }, tool_response: "x".repeat(50000), transcript_path: "C:\\segredo.jsonl", agent_transcript_path: "C:\\segredo-sub.jsonl", extra: "y".repeat(9000) }, { "x-niko-gancho": segredo() });
   assert.equal(r.status, 200);
   const controle = new AbortController();
   const fluxo = await fetch(`${base}/ponte/claude/eventos`, { signal: controle.signal });
@@ -157,6 +239,7 @@ test("descarta campos enormes e recorta textos longos", async () => {
   const evento = texto.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.sessao === "s3");
   assert.equal(evento.dados.tool_response, undefined);
   assert.equal(evento.dados.transcript_path, undefined);
+  assert.equal(evento.dados.agent_transcript_path, undefined);
   assert.ok(evento.dados.extra.length < 4100);
 });
 
@@ -235,6 +318,93 @@ test("sempre permitir só aceita a regra sugerida pelo Claude Code", async () =>
     hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow", updatedPermissions: [{ type: "allow", toolName: "Bash", ruleContent: "npm *", behavior: "allow", mode: "local", directories: [] }] } },
   });
   controle.abort();
+});
+
+test("pergunta do Claude responde pela ilha só com as opções que ele ofereceu", async () => {
+  const controle = new AbortController();
+  const fluxo = await fetch(`${base}/ponte/claude/eventos`, { signal: controle.signal });
+  const leitor = fluxo.body.getReader();
+  let buffer = "";
+  const entrada = {
+    questions: [
+      { question: "Qual banco?", header: "Banco", multiSelect: false, options: [{ label: "SQLite", description: "Local" }, { label: "Postgres", description: "Servidor" }] },
+      { question: "Quais testes?", header: "Testes", multiSelect: true, options: [{ label: "Unidade" }, { label: "Integração" }] },
+    ],
+  };
+  const resposta = enviar({ hook_event_name: "PermissionRequest", session_id: "s7", tool_name: "AskUserQuestion", tool_input: entrada }, { "x-niko-gancho": segredo() });
+  let pedido;
+  while (!pedido) {
+    buffer += new TextDecoder().decode((await leitor.read()).value);
+    pedido = buffer.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.sessao === "s7" && e.pedidoId);
+  }
+  const id = pedido.pedidoId;
+  assert.throws(() => claude.decidirPedido({ pedidoId: id, decisao: "allow" }), /respostas_invalidas/);
+  assert.throws(() => claude.decidirPedido({ pedidoId: id, decisao: "allow", respostas: [[5], [0]] }), /respostas_invalidas/);
+  assert.throws(() => claude.decidirPedido({ pedidoId: id, decisao: "allow", respostas: [[0, 1], [0]] }), /respostas_invalidas/);
+  assert.throws(() => claude.decidirPedido({ pedidoId: id, decisao: "allow", respostas: [[0]] }), /respostas_invalidas/);
+  assert.throws(() => claude.decidirPedido({ pedidoId: id, decisao: "allow", respostas: [[0], [0, 0]] }), /respostas_invalidas/);
+  assert.throws(() => claude.decidirPedido({ pedidoId: id, decisao: "allow", respostas: [[0], [1.5]] }), /respostas_invalidas/);
+  assert.throws(() => claude.decidirPedido({ pedidoId: id, decisao: "deny", respostas: [[0], [0]] }), /decisao_invalida/);
+  claude.decidirPedido({ pedidoId: id, decisao: "allow", respostas: [[1], [0, 1]] });
+  assert.deepEqual(await (await resposta).json(), {
+    hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow", updatedInput: { ...entrada, answers: { "Qual banco?": "Postgres", "Quais testes?": "Unidade,Integração" } } } },
+  });
+  controle.abort();
+});
+
+test("respostas só valem em pedidos que são perguntas", async () => {
+  const controle = new AbortController();
+  const fluxo = await fetch(`${base}/ponte/claude/eventos`, { signal: controle.signal });
+  const leitor = fluxo.body.getReader();
+  let buffer = "";
+  const resposta = enviar({ hook_event_name: "PermissionRequest", session_id: "s8", tool_name: "Bash", tool_input: { command: "ls" } }, { "x-niko-gancho": segredo() });
+  let pedido;
+  while (!pedido) {
+    buffer += new TextDecoder().decode((await leitor.read()).value);
+    pedido = buffer.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.sessao === "s8" && e.pedidoId);
+  }
+  assert.throws(() => claude.decidirPedido({ pedidoId: pedido.pedidoId, decisao: "allow", respostas: [[0]] }), /respostas_invalidas/);
+  claude.decidirPedido({ pedidoId: pedido.pedidoId, decisao: "terminal" });
+  await resposta;
+  controle.abort();
+});
+
+test("várias opções com vírgula no rótulo não viram resposta ambígua", () => {
+  const perguntas = [{ question: "Q", multiSelect: true, rotulos: ["Sim, agora", "Não"] }];
+  assert.throws(() => claude.respostasValidas(perguntas, [[0, 1]]), /respostas_invalidas/);
+  assert.deepEqual(claude.respostasValidas(perguntas, [[0]]), { Q: "Sim, agora" });
+});
+
+test("a ilha lê as perguntas do AskUserQuestion", async () => {
+  const { perguntasDaEntrada } = await vite.ssrLoadModule("/src/estado/claudeCode.ts");
+  assert.deepEqual(perguntasDaEntrada("AskUserQuestion", { questions: [{ question: "Qual?", header: "H", multiSelect: true, options: [{ label: "A", description: "d" }, { label: "" }] }] }), [{ pergunta: "Qual?", titulo: "H", varias: true, opcoes: [{ rotulo: "A", descricao: "d" }] }]);
+  assert.equal(perguntasDaEntrada("Bash", { questions: [] }), undefined);
+  assert.equal(perguntasDaEntrada("AskUserQuestion", { questions: [{ question: "Sem opções", options: [] }] }), undefined);
+});
+
+test("lembra o processo de cada sessão uma vez só e traz o terminal dela", async () => {
+  const antes = processosVistos.length;
+  await enviar({ hook_event_name: "SessionStart", session_id: "terminal-1", cwd: "C:\\p" }, { "x-niko-gancho": segredo() });
+  await enviar({ hook_event_name: "UserPromptSubmit", session_id: "terminal-1", cwd: "C:\\p" }, { "x-niko-gancho": segredo() });
+  assert.equal(processosVistos.length, antes + 1);
+  assert.deepEqual(await claude.trazerTerminal({ sessao: "terminal-1" }), { ok: true });
+  assert.equal(focados.at(-1), 4242);
+  await assert.rejects(claude.trazerTerminal({ sessao: "nunca-vista" }), /sem_processo/);
+});
+
+test("abrir arquivo do diff só aceita arquivo que existe dentro do projeto", () => {
+  const pasta = mkdtempSync(join(tmpdir(), "niko-arquivo-"));
+  try {
+    mkdirSync(join(pasta, "src"));
+    writeFileSync(join(pasta, "src", "a.ts"), "x");
+    assert.equal(claude.arquivoDoProjeto(pasta, join(pasta, "src", "a.ts")), join(pasta, "src", "a.ts"));
+    assert.equal(claude.arquivoDoProjeto(pasta, "src\\a.ts"), join(pasta, "src", "a.ts"));
+    for (const ruim of [join(pasta, "src", "nao.ts"), join(pasta, "src"), join(pasta, "..", "fora.ts"), "C:\\Windows\\win.ini", "", 5, "a\nb"]) {
+      assert.throws(() => claude.arquivoDoProjeto(pasta, ruim), /arquivo_invalido/, String(ruim));
+    }
+  } finally {
+    rmSync(pasta, { recursive: true, force: true });
+  }
 });
 
 test("abrir projeto recusa pastas que não vieram de uma sessão", () => {
@@ -323,4 +493,57 @@ test("mostra o modelo com nome legível", async () => {
   assert.equal(nomeDoModelo("claude-opus-4-20250514"), "Opus 4");
   assert.equal(nomeDoModelo("claude-3-5-haiku-20241022"), "Haiku 3.5");
   assert.equal(nomeDoModelo("gpt-5-codex"), "gpt-5-codex");
+});
+
+test("reconexão informa sessões atuais mesmo se o encerramento saiu dos 300 eventos", async () => {
+  const resVazia = { writableEnded: true };
+  claude.processarEvento({ hook_event_name: "SessionStart", session_id: "reconexao-encerrada", cwd: "C:/Projeto" }, "claude", resVazia);
+  claude.processarEvento({ hook_event_name: "SessionEnd", session_id: "reconexao-encerrada", cwd: "C:/Projeto" }, "claude", resVazia);
+  for (let i = 0; i < 301; i++) claude.processarEvento({ hook_event_name: "PreToolUse", session_id: "reconexao-viva", cwd: "C:/Projeto", tool_name: "Read" }, "claude", resVazia);
+  const controle = new AbortController();
+  try {
+    const fluxo = await fetch(`${base}/ponte/claude/eventos`, { signal: controle.signal });
+    const leitor = fluxo.body.getReader(); let texto = "";
+    while (!texto.includes("NikoConectado")) texto += new TextDecoder().decode((await leitor.read()).value);
+    const eventos = texto.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    assert.ok(!eventos.some((e) => e.evento === 'SessionEnd' && e.sessao === 'reconexao-encerrada'));
+    const atual = eventos.find((e) => e.evento === 'NikoSessoesAtuais');
+    assert.ok(atual.dados.sessoes.includes('reconexao-viva'));
+    assert.ok(!atual.dados.sessoes.includes('reconexao-encerrada'));
+    assert.deepEqual(atual.dados.pedidos, []);
+  } finally { controle.abort(); }
+});
+
+test("reconexão recupera Stop perdido sem expor conteúdo nem inventar atividade", async () => {
+  const anterior = useClaudeCode.getState();
+  const resVazia = { writableEnded: true };
+  const sessao = "reconexao-resposta-concluida";
+  useClaudeCode.getState().aplicar({ id: "reconexao-resposta-inicial", evento: "PreToolUse", recebidoEm: new Date(Date.now() - 60000).toISOString(), sessao, cwd: "C:/CAMINHO_PRIVADO_TESTE", dados: { tool_name: "Read" } });
+  claude.processarEvento({ hook_event_name: "PreToolUse", session_id: sessao }, "claude", resVazia);
+  claude.processarEvento({ hook_event_name: "Stop", session_id: sessao, last_assistant_message: "RESPOSTA_PRIVADA_TESTE" }, "claude", resVazia);
+  const transicoes = [
+    ["NikoPensando", {}, "pensando"],
+    ["UserPromptSubmit", {}, "pensando"],
+    ["PreToolUse", {}, "trabalhando"],
+    ["StopFailure", {}, "erro"],
+    ["Notification", { notification_type: "elicitation_url_dialog" }, "esperando"],
+    ["Notification", { message: "usage limit" }, "limite"],
+  ];
+  transicoes.forEach(([evento, dados], i) => claude.processarEvento({ hook_event_name: evento, session_id: `reconexao-estado-${i}`, ...dados }, "opencode", resVazia));
+  for (let i = 0; i < 301; i++) claude.processarEvento({ hook_event_name: "PreToolUse", session_id: "reconexao-outra-sessao", tool_name: "Read" }, "claude", resVazia);
+  const controle = new AbortController();
+  try {
+    const fluxo = await fetch(`${base}/ponte/claude/eventos`, { signal: controle.signal });
+    const leitor = fluxo.body.getReader(); let texto = "";
+    while (!texto.includes("NikoConectado")) texto += new TextDecoder().decode((await leitor.read()).value);
+    const eventos = texto.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    assert.ok(!eventos.some((e) => e.evento === "Stop" && e.sessao === sessao));
+    const snapshot = eventos.find((e) => e.evento === "NikoSessoesAtuais");
+    assert.equal(snapshot.dados.estados.find((s) => s.sessao === sessao).estado, "terminou");
+    transicoes.forEach(([, , estado], i) => assert.equal(snapshot.dados.estados.find((s) => s.sessao === `reconexao-estado-${i}`).estado, estado));
+    assert.doesNotMatch(JSON.stringify(snapshot), /RESPOSTA_PRIVADA_TESTE|CAMINHO_PRIVADO_TESTE|tool_input|last_assistant_message/);
+    eventos.forEach((e) => useClaudeCode.getState().aplicar(e));
+    const atual = useClaudeCode.getState().sessoes[sessao];
+    assert.equal(atual.estado, "terminou"); assert.equal(atual.ferramentasUsadas, 1); assert.equal(atual.passos.length, 1);
+  } finally { controle.abort(); useClaudeCode.setState(anterior); }
 });

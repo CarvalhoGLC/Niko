@@ -1,20 +1,22 @@
-import type { Plugin, Connect } from "./tiposVite";
+import type { Plugin, Connect } from "./tiposVite.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
-import { listarProvedores, salvarProvedor, removerProvedor, testarProvedor, conversar, validarMensagens, validarFerramentas } from "./ia";
-import { lerConsumo } from "./consumo";
-import { lerUltimaVersao } from "./atualizacoes";
-import { lerTudo, gravar, backupManual, zerarBanco } from "./banco";
-import { pedirMidia } from "./midia";
-import { pedirJanelas } from "./janelasWindows";
-import { estadoConexoes, lerConexao, salvarChaveConexao, removerChaveConexao, servicoValido, chaveDe, SERVICOS as SERVICOS_CONEXAO } from "./conexoes";
-import { buscarGmail, criarRascunhoGmail, enviarGmail } from "./gmail";
-import { lerAudio, definirVolume, definirMudo, ajustarSessao, lerTema, lerIniciar, definirTema, abrirFerramenta, agirNaEnergia, lerBandeja, abrirDaBandeja } from "./controleRapido";
-import { ocrDaRequisicao } from "./ocr";
-import { receberEventoDoGancho, ehRotaDoGancho, ouvirEventos, decidirPedido, estadoDaInstalacao, previaDaInstalacao, instalarGanchos, removerGanchos, abrirProjeto } from "./claude";
-import { ehRotaDeAgente, receberEventoDeAgente, estadoDosAgentes, instalarAgente, removerAgente } from "./agentesDeCodigo";
-import { listarArquivos, receberArquivo, enviarConteudo, excluirArquivo, excluirArquivosDaMateria, baixarArquivo, abrirArquivoNoPrograma } from "./arquivos";
-import { tipoDoComputador, estadoDoSistema, listarRedes, listarBluetooth, lerComputador, conectarRede, esquecerRede, desconectarRede, definirBrilho, definirRadio, abrirConfiguracoesWindows } from "./sistema";
+import { listarProvedores, salvarProvedor, removerProvedor, testarProvedor, conversar, validarMensagens, validarFerramentas } from "./ia.ts";
+import { lerConsumo, usoOficial } from "./consumo.ts";
+import { lerUltimaVersao } from "./atualizacoes.ts";
+import { lerTudo, gravar, backupManual, zerarBanco, reservarConfirmacao } from "./banco.ts";
+import { pedirMidia } from "./midia.ts";
+import { pedirJanelas } from "./janelasWindows.ts";
+import { estadoConexoes, lerConexao, salvarChaveConexao, removerChaveConexao, servicoValido, chaveDe, SERVICOS as SERVICOS_CONEXAO } from "./conexoes.ts";
+import { buscarGmail, criarRascunhoGmail, enviarGmail } from "./gmail.ts";
+import { lerAgendaGoogle } from "./agendaGoogle.ts";
+import { lerCotacoes } from "./cotacoes.ts";
+import { lerAudio, definirVolume, definirMudo, ajustarSessao, lerTema, lerIniciar, definirTema, abrirFerramenta, agirNaEnergia, lerBandeja, abrirDaBandeja, pastaDaBandeja, encerrarDaBandeja, listarApps, iconesDeApps, abrirApp, abrirComandoDoSistema } from "./controleRapido.ts";
+import { ocrDaRequisicao } from "./ocr.ts";
+import { receberEventoDoGancho, ehRotaDoGancho, ouvirEventos, decidirPedido, estadoDaInstalacao, previaDaInstalacao, instalarGanchos, removerGanchos, abrirProjeto, trazerTerminal, ehRotaDaStatus, receberStatusDoClaude } from "./claude.ts";
+import { ehRotaDeAgente, receberEventoDeAgente, estadoDosAgentes, instalarAgente, removerAgente } from "./agentesDeCodigo.ts";
+import { listarArquivos, receberArquivo, enviarConteudo, excluirArquivo, excluirArquivosDaMateria, baixarArquivo, abrirArquivoNoPrograma } from "./arquivos.ts";
+import { tipoDoComputador, estadoDoSistema, listarRedes, listarBluetooth, lerComputador, conectarRede, esquecerRede, desconectarRede, definirBrilho, definirRadio, abrirConfiguracoesWindows } from "./sistema.ts";
 
 const LIMITE_CORPO = 24 * 1024 * 1024;
 
@@ -33,7 +35,9 @@ function lerCorpo(req: IncomingMessage): Promise<Record<string, unknown>> {
     });
     req.on("end", () => {
       try {
-        resolver(partes.length ? JSON.parse(Buffer.concat(partes).toString("utf8")) : {});
+        const corpo: unknown = partes.length ? JSON.parse(Buffer.concat(partes).toString("utf8")) : {};
+        if (corpo === null || typeof corpo !== "object" || Array.isArray(corpo)) throw new Error("json_invalido");
+        resolver(corpo as Record<string, unknown>);
       } catch {
         rejeitar(new Error("json_invalido"));
       }
@@ -79,6 +83,7 @@ export const rotas: Connect.NextHandleFunction = async (req, res, proximo) => {
   if (!url.pathname.startsWith("/ponte/")) return proximo();
   if (!hostLocal(req)) return responder(res, 403, { erro: "host_nao_permitido" });
   if (ehRotaDoGancho(url.pathname) && req.method === "POST") return receberEventoDoGancho(req, res);
+  if (ehRotaDaStatus(url.pathname) && req.method === "POST") return receberStatusDoClaude(req, res);
   if (ehRotaDeAgente(url.pathname) && req.method === "POST") return receberEventoDeAgente(req, res, url);
   if (!origemConfiavel(req)) return responder(res, 403, { erro: "origem_nao_permitida" });
   const caminho = url.pathname.slice("/ponte".length);
@@ -105,6 +110,7 @@ export const rotas: Connect.NextHandleFunction = async (req, res, proximo) => {
     if (caminho === "/claude/eventos" && req.method === "GET") return ouvirEventos(req, res);
     if (caminho === "/claude/decisao" && req.method === "POST") return responder(res, 200, decidirPedido(await lerCorpo(req)));
     if (caminho === "/claude/abrir" && req.method === "POST") return responder(res, 200, abrirProjeto(await lerCorpo(req)));
+    if (caminho === "/claude/terminal" && req.method === "POST") return responder(res, 200, await trazerTerminal(await lerCorpo(req)));
     if (caminho === "/claude/instalacao" && req.method === "GET") return responder(res, 200, estadoDaInstalacao());
     if (caminho === "/claude/previa" && req.method === "GET") return responder(res, 200, previaDaInstalacao(url.searchParams.get("acao") === "remover" ? "remover" : "instalar"));
     if (caminho === "/claude/instalar" && req.method === "POST") return responder(res, 200, instalarGanchos(await lerCorpo(req)));
@@ -117,7 +123,7 @@ export const rotas: Connect.NextHandleFunction = async (req, res, proximo) => {
     if (arquivo) {
       const banco = String(req.headers["x-niko-banco"] ?? "");
       const [, materia, id, acao] = arquivo;
-      if (!id && req.method === "GET") return responder(res, 200, { arquivos: listarArquivos(banco, materia) });
+      if (!id && req.method === "GET") return responder(res, 200, { arquivos: await listarArquivos(banco, materia) });
       if (!id && req.method === "POST") return responder(res, 200, await receberArquivo(req, banco, materia, url.searchParams.get("nome") ?? ""));
       if (!id && req.method === "DELETE") return responder(res, 200, excluirArquivosDaMateria(banco, materia));
       if (id && !acao && req.method === "GET") return enviarConteudo(res, banco, materia, id);
@@ -142,9 +148,12 @@ export const rotas: Connect.NextHandleFunction = async (req, res, proximo) => {
     if (caminho === "/conexoes" && req.method === "GET") {
       return responder(res, 200, estadoConexoes());
     }
-    if (caminho === "/gmail/buscar" && req.method === "GET") return responder(res, 200, await buscarGmail(await chaveDe("gmail"), url.searchParams.get("q") ?? ""));
-    if (caminho === "/gmail/rascunho" && req.method === "POST") return responder(res, 200, await criarRascunhoGmail(await chaveDe("gmail"), await lerCorpo(req)));
-    if (caminho === "/gmail/enviar" && req.method === "POST") return responder(res, 200, await enviarGmail(await chaveDe("gmail"), await lerCorpo(req)));
+    if (caminho === "/cotacoes" && req.method === "GET") return responder(res, 200, await lerCotacoes());
+    if (caminho === "/google/login-direto" && req.method === "GET") return responder(res, 200, { disponivel: false, emTestes: true });
+    if (caminho === "/gmail/buscar" && req.method === "GET") return responder(res, 200, await buscarGmail(await chaveDe("google"), url.searchParams.get("q") ?? ""));
+    if (caminho === "/agenda/eventos" && req.method === "GET") return responder(res, 200, await lerAgendaGoogle(await chaveDe("google"), url.searchParams.get("de") ?? "", url.searchParams.get("ate") ?? ""));
+    if (caminho === "/gmail/rascunho" && req.method === "POST") return responder(res, 200, await criarRascunhoGmail(await chaveDe("google"), await lerCorpo(req)));
+    if (caminho === "/gmail/enviar" && req.method === "POST") return responder(res, 200, await enviarGmail(await chaveDe("google"), await lerCorpo(req)));
     const conexao = /^\/conexoes\/([a-z]+)(\/chave)?$/.exec(caminho);
     if (conexao && servicoValido(conexao[1])) {
       const servico = conexao[1];
@@ -173,9 +182,15 @@ export const rotas: Connect.NextHandleFunction = async (req, res, proximo) => {
       return responder(res, 200, { pasta });
     }
     if (caminho === "/dados/backup" && req.method === "POST") {
-      return responder(res, 200, { pasta: backupManual() });
+      return responder(res, 200, { pasta: backupManual(String(req.headers["x-niko-banco"] ?? "")) });
+    }
+    if (caminho === "/confirmacoes/reservar" && req.method === "POST") {
+      const corpo = await lerCorpo(req);
+      if (typeof corpo.id !== "string" || typeof corpo.aceitar !== "boolean") return responder(res, 400, { erro: "confirmacao_invalida" });
+      return responder(res, 200, reservarConfirmacao(corpo.id, corpo.aceitar, String(req.headers["x-niko-banco"] ?? "")));
     }
     if (caminho === "/consumo" && req.method === "GET") {
+      if (url.searchParams.get("oficial") === "1") return responder(res, 200, usoOficial());
       return responder(res, 200, await lerConsumo(url.searchParams.get("forcar") === "1"));
     }
     if (caminho === "/ia" && req.method === "POST") {
@@ -219,6 +234,12 @@ export const rotas: Connect.NextHandleFunction = async (req, res, proximo) => {
         ferramenta: abrirFerramenta,
         energia: agirNaEnergia,
         bandeja: abrirDaBandeja,
+        bandejaPasta: pastaDaBandeja,
+        bandejaEncerrar: encerrarDaBandeja,
+        apps: listarApps,
+        iconesApps: iconesDeApps,
+        abrirApp,
+        comandoDoSistema: abrirComandoDoSistema,
       };
       if (req.method === "GET" && leitura[acao]) return responder(res, 200, await leitura[acao]());
       if (req.method === "POST" && escrita[acao]) return responder(res, 200, await escrita[acao](await lerCorpo(req)));

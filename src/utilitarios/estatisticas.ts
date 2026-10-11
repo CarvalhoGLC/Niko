@@ -1,6 +1,6 @@
 import { addDays, eachDayOfInterval, startOfYear, endOfYear } from "date-fns";
 import type { Habito, SessaoPomodoro, Tarefa, RegistroRevisao, Conexao } from "../tipos";
-import { paraISO, hojeISO, deISO } from "./datas";
+import { paraISO, hojeISO, deISO, diaDoMomento } from "./datas";
 import { habitoCumprido } from "../estado/rotina";
 import { lerChave, gravarChave } from "../ponte/armazenamento";
 
@@ -44,7 +44,7 @@ export function minutosEstudoPorDia(sessoes: SessaoPomodoro[]): Map<string, numb
   const mapa = new Map<string, number>();
   for (const s of sessoes) {
     if (s.etapa !== "foco" || s.situacao !== "concluida") continue;
-    const d = paraISO(new Date(s.inicio));
+    const d = diaDoMomento(s.inicio);
     mapa.set(d, (mapa.get(d) ?? 0) + s.minutos);
   }
   return mapa;
@@ -57,7 +57,7 @@ export function valoresDoMapa(dados: DadosMapa, fonte: FonteMapa, ano = new Date
   const concluidas = new Map<string, number>();
   for (const t of dados.tarefas) {
     if (t.status !== "concluida" || !t.concluidaEm) continue;
-    const d = paraISO(new Date(t.concluidaEm));
+    const d = diaDoMomento(t.concluidaEm);
     concluidas.set(d, (concluidas.get(d) ?? 0) + 1);
   }
   const ativos = dados.habitos.filter((h) => !h.arquivado);

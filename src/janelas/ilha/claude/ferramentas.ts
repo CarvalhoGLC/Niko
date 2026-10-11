@@ -9,6 +9,8 @@ export const MARCA_DA_FERRAMENTA: Record<FerramentaDeCodigo, MarcaId> = {
   opencode: "opencode",
   antigravity: "antigravity",
   kimi: "kimi",
+  gemini: "gemini",
+  amp: "amp",
 };
 
 export const COR_DA_FERRAMENTA: Record<FerramentaDeCodigo, string> = {
@@ -18,6 +20,8 @@ export const COR_DA_FERRAMENTA: Record<FerramentaDeCodigo, string> = {
   opencode: "#cfcfcf",
   antigravity: "#3186ff",
   kimi: "#5b8cff",
+  gemini: "#8e75b2",
+  amp: "#f34e3f",
 };
 
 export function nomeDaFerramenta(ferramenta: FerramentaDeCodigo | undefined): string {

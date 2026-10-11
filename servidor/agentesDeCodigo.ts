@@ -3,19 +3,22 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, 
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  CABECALHO_SEGREDO, estadoDaInstalacao, instalarGanchos, lerCorpoJson, porta, processarEvento, removerGanchos, segredo, segredoConfere, type FerramentaDeCodigo,
-} from "./claude";
+  CABECALHO_SEGREDO, estadoDaInstalacao, instalarGanchos, lembrarProcesso, lerCorpoJson, porta, processarEvento, removerGanchos, segredo, segredoConfere, type FerramentaDeCodigo,
+} from "./claude.ts";
 
 const PREFIXO_DA_ROTA = "/ponte/agentes/evento/";
 const TEMPO_DO_PEDIDO_S = 115;
 const TEMPO_DO_GANCHO_DECISAO_S = 120;
 const TEMPO_DO_GANCHO_RAPIDO_S = 10;
 const TEMPO_DO_GANCHO_FINAL_S = 3;
+const TEMPO_PARA_CONECTAR_S = 1;
+const TEMPO_DO_CURL_RAPIDO_S = 3;
 const INICIO_DO_BLOCO_TOML = "# niko:inicio (gerado pelo Niko, remova pelo Niko)";
 const FIM_DO_BLOCO_TOML = "# niko:fim";
 
-export const FERRAMENTAS_DE_CODIGO: FerramentaDeCodigo[] = ["claude", "codex", "copilot", "opencode", "antigravity", "kimi"];
-const FERRAMENTAS_COM_RESPOSTA_JSON = new Set<FerramentaDeCodigo>(["copilot", "antigravity"]);
+export const FERRAMENTAS_DE_CODIGO: FerramentaDeCodigo[] = ["claude", "codex", "copilot", "opencode", "antigravity", "kimi", "gemini", "amp"];
+const FERRAMENTAS_COM_RESPOSTA_JSON = new Set<FerramentaDeCodigo>(["copilot", "antigravity", "gemini"]);
+const MS_POR_SEGUNDO = 1000;
 
 type Corpo = Record<string, unknown>;
 
@@ -36,8 +39,8 @@ function urlDoEvento(ferramenta: FerramentaDeCodigo, evento: string) {
 }
 
 export function comandoDoGancho(ferramenta: FerramentaDeCodigo, evento: string, chave: string, decide = false) {
-  const tempo = decide ? TEMPO_DO_PEDIDO_S : TEMPO_DO_GANCHO_RAPIDO_S - 2;
-  return `curl.exe -s -m ${tempo} -X POST -H "content-type: application/json" -H "${CABECALHO_SEGREDO}: ${chave}" --data-binary "@-" "${urlDoEvento(ferramenta, evento)}"`;
+  const tempo = decide ? TEMPO_DO_PEDIDO_S : TEMPO_DO_CURL_RAPIDO_S;
+  return `curl.exe -s --connect-timeout ${TEMPO_PARA_CONECTAR_S} -m ${tempo} -X POST -H "content-type: application/json" -H "${CABECALHO_SEGREDO}: ${chave}" --data-binary "@-" "${urlDoEvento(ferramenta, evento)}"`;
 }
 
 const EVENTOS_DO_COPILOT: Record<string, string> = {
@@ -57,6 +60,17 @@ const EVENTOS_DO_COPILOT: Record<string, string> = {
 const EVENTOS_DO_CODEX = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "Stop", "Interrupt", "SubagentStart", "SubagentStop"];
 const EVENTOS_DO_KIMI = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "Notification", "Stop", "Interrupt"];
 const EVENTOS_DO_ANTIGRAVITY = ["PreInvocation", "PreToolUse", "Stop"];
+
+const EVENTOS_DO_GEMINI: Record<string, string> = {
+  SessionStart: "SessionStart",
+  SessionEnd: "SessionEnd",
+  BeforeAgent: "UserPromptSubmit",
+  AfterAgent: "Stop",
+  BeforeTool: "PreToolUse",
+  Notification: "Notification",
+};
+
+const FERRAMENTAS_DO_GEMINI: Record<string, string> = { replace: "Edit", write_file: "Write", run_shell_command: "Bash", read_file: "Read", glob: "Glob", search_file_content: "Grep", web_fetch: "WebFetch", google_web_search: "WebSearch" };
 
 function tipoDeAviso(tipo: string): string {
   return /permission|approv|input|idle|elicitation/i.test(tipo) ? "agent_needs_input" : tipo;
@@ -110,7 +124,20 @@ export function normalizarEvento(ferramenta: FerramentaDeCodigo, eventoDaRota: s
     }
     return null;
   }
-  if (ferramenta === "opencode") return texto(corpo.hook_event_name) ? corpo : null;
+  if (ferramenta === "gemini") {
+    const nome = EVENTOS_DO_GEMINI[texto(corpo.hook_event_name) || eventoDaRota];
+    if (!nome) return null;
+    const base = { hook_event_name: nome, session_id: texto(corpo.session_id), cwd: texto(corpo.cwd) };
+    if (nome === "UserPromptSubmit") return { ...base, prompt: texto(corpo.prompt) };
+    if (nome === "Stop") return { ...base, last_assistant_message: texto(corpo.prompt_response) };
+    if (nome === "PreToolUse") {
+      const original = texto(corpo.tool_name);
+      return { ...base, tool_name: FERRAMENTAS_DO_GEMINI[original] ?? original, tool_input: argumentos(corpo.tool_input) };
+    }
+    if (nome === "Notification") return { ...base, notification_type: texto(corpo.notification_type) === "ToolPermission" ? "agent_needs_input" : texto(corpo.notification_type), message: texto(corpo.message) };
+    return base;
+  }
+  if (ferramenta === "opencode" || ferramenta === "amp") return texto(corpo.hook_event_name) ? corpo : null;
   return null;
 }
 
@@ -148,6 +175,7 @@ export async function receberEventoDeAgente(req: IncomingMessage, res: ServerRes
   }
   const normalizado = normalizarEvento(ferramenta, url.searchParams.get("evento") ?? "", corpo);
   if (!normalizado) return vazio(res);
+  await lembrarProcesso(req, normalizado);
   processarEvento(normalizado, ferramenta, res, vazio);
 }
 
@@ -242,6 +270,28 @@ const INSTALADORES: Record<Exclude<FerramentaDeCodigo, "claude">, Instalador> = 
       return `${JSON.stringify(dados, null, 2)}\n`;
     },
   },
+  gemini: {
+    arquivo: () => casa(".gemini", "settings.json"),
+    detectado: () => existsSync(casa(".gemini", "settings.json")) || existsSync(casa(".gemini", "oauth_creds.json")),
+    propor: (atual, chave) => {
+      const dados = lerJson(atual);
+      const hooks = semGruposDoNiko(objeto(dados.hooks), "gemini");
+      for (const evento of Object.keys(EVENTOS_DO_GEMINI)) {
+        const grupos = Array.isArray(hooks[evento]) ? (hooks[evento] as unknown[]) : [];
+        const segundos = evento === "SessionEnd" ? TEMPO_DO_GANCHO_FINAL_S : TEMPO_DO_GANCHO_RAPIDO_S;
+        const ganchoDoNiko = { name: "niko", type: "command", command: comandoDoGancho("gemini", evento, chave), timeout: segundos * MS_POR_SEGUNDO };
+        hooks[evento] = [...grupos, { ...(evento === "BeforeTool" ? { matcher: "*" } : {}), hooks: [ganchoDoNiko] }];
+      }
+      return `${JSON.stringify({ ...dados, hooks }, null, 2)}\n`;
+    },
+    retirar: (atual) => {
+      const dados = lerJson(atual);
+      const hooks = semGruposDoNiko(objeto(dados.hooks), "gemini");
+      const resto = { ...dados, hooks };
+      if (Object.keys(hooks).length === 0) delete (resto as Corpo).hooks;
+      return `${JSON.stringify(resto, null, 2)}\n`;
+    },
+  },
   kimi: {
     arquivo: () => casa(".kimi-code", "config.toml"),
     detectado: () => existsSync(casa(".kimi-code")),
@@ -255,6 +305,12 @@ const INSTALADORES: Record<Exclude<FerramentaDeCodigo, "claude">, Instalador> = 
       return `${base ? `${base}\n\n` : ""}${INICIO_DO_BLOCO_TOML}\n${entradas.join("\n\n")}\n${FIM_DO_BLOCO_TOML}\n`;
     },
     retirar: (atual) => `${semBlocoToml(atual).replace(/\s*$/, "")}\n`,
+  },
+  amp: {
+    arquivo: () => casa(".config", "amp", "plugins", "niko.ts"),
+    detectado: () => existsSync(casa(".config", "amp")),
+    propor: (_atual, chave) => pluginDoAmp(chave),
+    retirar: () => null,
   },
   opencode: {
     arquivo: () => casa(".config", "opencode", "plugins", "niko.js"),
@@ -317,6 +373,33 @@ export const NikoPlugin = async ({ directory }) => ({
 `;
 }
 
+export function pluginDoAmp(chave: string) {
+  const url = `http://127.0.0.1:${porta()}${PREFIXO_DA_ROTA}amp`;
+  return `// Gerado pelo Niko: manda os eventos do Amp para a ilha, só para acompanhar. Remova pelo Niko.
+const URL_DO_NIKO = ${JSON.stringify(url)};
+const CHAVE = ${JSON.stringify(chave)};
+
+function enviar(corpo) {
+  fetch(URL_DO_NIKO, {
+    method: "POST",
+    headers: { "content-type": "application/json", ${JSON.stringify(CABECALHO_SEGREDO)}: CHAVE },
+    body: JSON.stringify({ cwd: process.cwd(), ...corpo }),
+    signal: AbortSignal.timeout(3000),
+  }).catch(() => {});
+}
+
+export default function (amp) {
+  amp.on("session.start", (e) => enviar({ session_id: e.thread?.id ?? "", hook_event_name: "SessionStart" }));
+  amp.on("agent.start", (e) => enviar({ session_id: e.thread?.id ?? "", hook_event_name: "UserPromptSubmit", prompt: String(e.message ?? "").slice(0, 2000) }));
+  amp.on("agent.end", (e) => enviar({ session_id: e.thread?.id ?? "", hook_event_name: e.status === "error" ? "StopFailure" : "Stop" }));
+  amp.on("tool.call", (e) => {
+    enviar({ session_id: e.thread?.id ?? "", hook_event_name: "PreToolUse", tool_name: e.tool, tool_input: e.input ?? {} });
+    return { action: "allow" };
+  });
+}
+`;
+}
+
 function lerTexto(caminho: string): string | null {
   return existsSync(caminho) ? readFileSync(caminho, "utf8") : null;
 }
@@ -356,7 +439,8 @@ function estadoDe(id: FerramentaDeCodigo): EstadoDaFerramenta {
   const caminho = instalador.arquivo();
   const conteudo = lerTexto(caminho) ?? "";
   const temNiko = conteudo.includes(`${PREFIXO_DA_ROTA}${id}`);
-  const atual = temNiko && conteudo.includes(segredo()) && conteudo.includes(`127.0.0.1:${porta()}`);
+  const usaCurl = !["opencode", "amp"].includes(id);
+  const atual = temNiko && conteudo.includes(segredo()) && conteudo.includes(`127.0.0.1:${porta()}`) && (!usaCurl || conteudo.includes("--connect-timeout"));
   let invalido = false;
   if (conteudo && caminho.endsWith(".json")) {
     try {

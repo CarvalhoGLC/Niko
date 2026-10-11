@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
-import { Plus, Trash2, Target, Columns3, ImagePlus, Pencil, Gauge } from "lucide-react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { Plus, Trash2, Target, ImagePlus, Pencil, Image as IconeImagem } from "lucide-react";
 import { CabecalhoAba } from "../../componentes/CabecalhoAba";
-import { Cartao, Botao, Campo, Modal, Progresso, Vazio, ConfirmarModal } from "../../componentes/basicos";
+import { Botao, Campo, Modal, Vazio, ConfirmarModal } from "../../componentes/basicos";
 import { useOrganizacao } from "../../estado/organizacao";
 import { useRotina, habitoCumprido } from "../../estado/rotina";
 import { usePomodoro } from "../../estado/pomodoro";
@@ -9,12 +9,14 @@ import { useFinancas } from "../../estado/financas";
 import { useEstudos } from "../../estado/estudos";
 import { useInterface } from "../../estado/interface";
 import { T } from "../../textos/textos";
-import { dataValida, formatar, paraISO } from "../../utilitarios/datas";
+import { dataValida, diasAte, formatar, paraISO } from "../../utilitarios/datas";
 import { lerImagemComoDataUrl, somar } from "../../utilitarios/basicos";
 import { tocarSom } from "../../ponte/sons";
 import { EVENTO_NOVO } from "../../janelas/area-de-trabalho/usarAtalhos";
 import { addDays } from "date-fns";
 import type { CartaoVisao, Meta, TipoMeta } from "../../tipos";
+
+const COR_PILAR = ["var(--sucesso)", "var(--roxo)", "var(--alerta)", "var(--info)", "var(--destaque-claro)"];
 
 function useProgresso() {
   const tarefas = useRotina((s) => s.tarefas);
@@ -230,6 +232,7 @@ export default function Metas() {
   const avisar = useInterface((s) => s.avisar);
   const [novaMeta, setNovaMeta] = useState(false);
   const [novaVisao, setNovaVisao] = useState(false);
+  const [criandoPilar, setCriandoPilar] = useState(false);
   const [novoPilar, setNovoPilar] = useState("");
   const [erroPilar, setErroPilar] = useState("");
   const [atualizando, setAtualizando] = useState<Meta | null>(null);
@@ -255,112 +258,155 @@ export default function Metas() {
       <CabecalhoAba
         titulo={T.metas.titulo}
         subtitulo={T.metas.subtitulo}
-        agente="organizador"
         acoes={
           <>
-            <Botao pequeno variante="primario" icone={<Plus size={13} />} onClick={() => setNovaMeta(true)}>{T.metas.novaMeta}</Botao>
-            <Botao pequeno icone={<ImagePlus size={13} />} onClick={() => setNovaVisao(true)}>{T.metas.novoCartaoVisao}</Botao>
+            <Botao className="mt-botao-cabecalho" icone={<Plus size={13} />} onClick={() => setCriandoPilar(true)}>{T.metas.novoPilar}</Botao>
+            <Botao className="mt-botao-cabecalho" variante="primario" icone={<Plus size={13} />} onClick={() => setNovaMeta(true)}>{T.metas.novaMeta}</Botao>
           </>
         }
       />
-      <div className="grade">
-        <Cartao className="col-3"><span className="rotulo-secao">{T.metas.metasAtivas}</span><div className="numero-grande">{org.metas.length}</div></Cartao>
-        <Cartao className="col-3"><span className="rotulo-secao">{T.metas.tarefasConcluidas}</span><div className="numero-grande">{tarefas.filter((t) => t.status === "concluida").length}</div></Cartao>
-        <Cartao className="col-3"><span className="rotulo-secao">{T.metas.pilares}</span><div className="numero-grande">{org.pilares.length}</div></Cartao>
-        <Cartao className="col-3"><span className="rotulo-secao">{T.metas.progressoMedio}</span><div className="numero-grande">{media}%</div></Cartao>
 
-        <Cartao className="col-8" titulo={T.metas.ativas} icone={<Target size={16} />}>
-          {org.metas.length === 0 ? (
-            <Vazio icone={<Target size={28} />} titulo={T.metas.semMetas} acao={<Botao variante="primario" onClick={() => setNovaMeta(true)}>{T.metas.novaMeta}</Botao>} />
-          ) : (
-            <div className="lista">
-              {org.metas.map((m) => {
-                const p = progresso(m);
-                const pct = Math.min(1, p.atual / Math.max(1, p.alvo));
-                return (
-                  <div key={m.id} className="lista-item" style={{ alignItems: "flex-start", padding: "12px 0" }}>
-                    <div className="lista-item-principal" style={{ gap: 6 }}>
-                      <div className="linha-entre">
-                        <span>{m.nome}</span>
-                        <span className="texto-2 numero" style={{ fontSize: 12 }}>{p.rotulo}</span>
-                      </div>
-                      <Progresso valor={pct} nivel={pct >= 1 ? "sucesso" : undefined} rotulo={m.nome} />
-                      <span className="lista-item-sub">{org.pilares.find((x) => x.id === m.pilarId)?.nome} . {T.metas.tipos[m.tipo]} . {m.periodo === "ano" ? T.metas.ano : T.metas.trimestre}</span>
-                    </div>
-                    <div className="linha" style={{ gap: 0 }}>
-                      {m.tipo === "manual" && <Botao pequeno soIcone variante="fantasma" icone={<Pencil size={13} />} aria-label={T.metas.atualizarValor} title={T.metas.atualizarValor} onClick={() => { setAtualizando(m); setValor(String(m.atual)); }} />}
-                      <Botao pequeno soIcone variante="fantasma" icone={<Trash2 size={13} />} aria-label={T.geral.excluir} onClick={() => setExcluir(m)} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Cartao>
+      <section className="bento mt-numeros">
+        <div className="mt-numero"><span className="mt-numero-valor">{org.metas.length}</span><span className="mt-numero-rotulo">{T.metas.metasAtivas}</span></div>
+        <div className="mt-numero"><span className="mt-numero-valor">{tarefas.filter((t) => t.status === "concluida").length}</span><span className="mt-numero-rotulo">{T.metas.tarefasConcluidas}</span></div>
+        <div className="mt-numero"><span className="mt-numero-valor" data-destaque="sim">{media}%</span><span className="mt-numero-rotulo">{T.metas.progressoMedio}</span></div>
+      </section>
 
-        <Cartao className="col-4" titulo={T.metas.pilares} icone={<Columns3 size={16} />}>
-          <div className="coluna" style={{ gap: 12 }}>
-            {org.pilares.map((p) => (
-              <div key={p.id} className="coluna" style={{ gap: 4 }}>
-                <div className="linha-entre">
-                  <span>{p.nome}</span>
-                  <span className="linha" style={{ gap: 4 }}>
-                    <span className="texto-3" style={{ fontSize: 11 }}>{org.metas.filter((m) => m.pilarId === p.id).length}</span>
-                    <Botao pequeno soIcone variante="fantasma" icone={<Trash2 size={12} />} aria-label={T.geral.excluir} onClick={() => org.excluirPilar(p.id)} />
+      <section className="mt-secao">
+        <header className="secao-cabecalho">
+          <span className="secao-titulo">{T.metas.pilares}</span>
+          <span className="tracejado" />
+          <span className="secao-extra">{org.pilares.length}</span>
+        </header>
+        <div className="mt-pilares">
+          {org.pilares.map((p, n) => {
+            const quantas = org.metas.filter((m) => m.pilarId === p.id).length;
+            return (
+              <div key={p.id} className="mt-pilar" style={{ "--cor": COR_PILAR[n % COR_PILAR.length], "--nota": `${p.nota * 10}%` } as CSSProperties}>
+                <span className="mt-pilar-anel"><span>{p.nota}</span></span>
+                <span className="mt-pilar-texto">
+                  <span className="mt-pilar-nome cortar">{p.nome}</span>
+                  <span className="mt-pilar-metas">{T.metas.quantasMetas(quantas)}</span>
+                  <span className="mt-pilar-nota" role="group" aria-label={`${T.metas.nota} ${p.nome}`}>
+                    {Array.from({ length: 10 }, (_, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        aria-label={`${T.metas.nota} ${i + 1}`}
+                        aria-pressed={i < p.nota}
+                        title={String(i + 1)}
+                        onClick={() => org.atualizarPilar(p.id, { nota: p.nota === i + 1 ? i : i + 1 })}
+                      />
+                    ))}
                   </span>
-                </div>
-                <div className="linha">
-                  <input type="range" min={0} max={10} step={1} value={p.nota} aria-label={`${T.metas.nota} ${p.nome}`} className="faixa" onChange={(e) => org.atualizarPilar(p.id, { nota: Number(e.target.value) })} />
-                  <span className="numero" style={{ minWidth: 20, textAlign: "right" }}>{p.nota}</span>
-                </div>
+                </span>
+                <button type="button" className="mt-icone-excluir" aria-label={T.metas.excluirPilar(p.nome)} title={T.metas.excluirPilar(p.nome)} onClick={() => org.excluirPilar(p.id)}>
+                  <Trash2 size={13} />
+                </button>
               </div>
-            ))}
-            <form
-              className="linha"
-              style={{ alignItems: "flex-start" }}
-              noValidate
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!novoPilar.trim()) return setErroPilar(T.validacao.obrigatorio);
-                org.criarPilar(novoPilar);
-                setNovoPilar("");
-                setErroPilar("");
-              }}
-            >
-              <div className="campo-grupo" style={{ flex: 1 }}>
-                <input className="campo" value={novoPilar} maxLength={40} placeholder={T.metas.novoPilar} aria-label={T.metas.novoPilar} onChange={(e) => { setNovoPilar(e.target.value); setErroPilar(""); }} />
-                {erroPilar && <span className="campo-erro">{erroPilar}</span>}
-              </div>
-              <Botao type="submit" soIcone icone={<Plus size={14} />} aria-label={T.metas.novoPilar} />
-            </form>
-          </div>
-        </Cartao>
+            );
+          })}
+        </div>
+      </section>
 
-        <Cartao className="col-12" titulo={T.metas.visao} icone={<ImagePlus size={16} />} acoes={<Botao pequeno icone={<Plus size={13} />} onClick={() => setNovaVisao(true)}>{T.metas.novoCartaoVisao}</Botao>}>
-          {org.visao.length === 0 ? <Vazio titulo={T.metas.semVisao} /> : (
-            <div className="grade-visao">
-              {org.visao.map((v) => (
-                <div key={v.id} className="cartao-visao">
-                  {v.imagem ? <img src={v.imagem} alt="" /> : <div className="cartao-visao-sem-imagem"><Gauge size={24} /></div>}
-                  <div className="coluna" style={{ gap: 4, padding: 12 }}>
-                    <div className="linha-entre">
-                      <b className="cortar">{v.titulo}</b>
-                      <Botao pequeno soIcone variante="fantasma" icone={<Trash2 size={12} />} aria-label={T.geral.excluir} onClick={() => { org.excluirVisao(v.id); avisar(T.geral.excluido); }} />
+      <section className="mt-metas">
+        <header className="secao-cabecalho mt-metas-cabecalho">
+          <span className="secao-titulo">{T.metas.ativas}</span>
+          <span className="tracejado" />
+        </header>
+        {org.metas.length === 0 ? (
+          <Vazio icone={<Target size={28} />} titulo={T.metas.semMetas} acao={<Botao variante="primario" onClick={() => setNovaMeta(true)}>{T.metas.novaMeta}</Botao>} />
+        ) : org.metas.map((m) => {
+          const p = progresso(m);
+          const pct = Math.min(1, p.atual / Math.max(1, p.alvo));
+          const pctTexto = `${Math.round(pct * 100)}%`;
+          return (
+            <div key={m.id} className="mt-meta">
+              <span className="mt-meta-nome">
+                <span className="cortar">{m.nome}</span>
+                <span className="mt-meta-sub">{T.metas.subtituloMeta(org.pilares.find((x) => x.id === m.pilarId)?.nome ?? "", T.metas.tipos[m.tipo])}</span>
+              </span>
+              <span className="mt-meta-progresso">
+                <span className="mt-meta-valores"><span>{p.rotulo}</span><span>{pctTexto}</span></span>
+                <span className="mt-trilho" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct * 100)} aria-label={m.nome}>
+                  <span style={{ width: pctTexto }} data-alto={pct >= 0.8 ? "sim" : "nao"} />
+                </span>
+              </span>
+              <span className="mt-meta-fim">
+                <span className="mt-meta-periodo">{m.periodo === "ano" ? T.metas.ano : T.metas.trimestre}</span>
+                <span className={`etiqueta ${pct >= 1 ? "etiqueta-sucesso" : "etiqueta-info"}`}>{pct >= 1 ? T.metas.estados.concluida : T.metas.estados.em_andamento}</span>
+                <span className="mt-meta-acoes">
+                  {m.tipo === "manual" && <Botao pequeno soIcone variante="fantasma" icone={<Pencil size={13} />} aria-label={T.metas.atualizarValor} title={T.metas.atualizarValor} onClick={() => { setAtualizando(m); setValor(String(m.atual)); }} />}
+                  <Botao pequeno soIcone variante="fantasma" icone={<Trash2 size={13} />} aria-label={T.geral.excluir} title={T.geral.excluir} onClick={() => setExcluir(m)} />
+                </span>
+              </span>
+            </div>
+          );
+        })}
+      </section>
+
+      <section className="mt-secao">
+        <header className="secao-cabecalho">
+          <span className="secao-titulo">{T.metas.visao}</span>
+          <span className="tracejado" />
+          <Botao pequeno icone={<Plus size={12} />} onClick={() => setNovaVisao(true)}>{T.metas.novoCartaoVisao}</Botao>
+        </header>
+        {org.visao.length === 0 ? (
+          <div className="mt-visao-vazio"><Vazio icone={<ImagePlus size={24} />} titulo={T.metas.semVisao} /></div>
+        ) : (
+          <div className="mt-visao">
+            {org.visao.map((v) => {
+              const dias = v.prazo ? diasAte(v.prazo) : null;
+              return (
+                <article key={v.id} className="mt-cartao">
+                  <div className="mt-cartao-imagem">
+                    {v.imagem ? <img src={v.imagem} alt="" /> : <IconeImagem size={22} className="mt-cartao-sem-imagem" />}
+                    <select className="mt-chip mt-chip-estado" data-estado={v.estado} value={v.estado} aria-label={T.metas.estado} onChange={(e) => org.atualizarVisao(v.id, { estado: e.target.value as CartaoVisao["estado"] })}>
+                      {(Object.keys(T.metas.estados) as CartaoVisao["estado"][]).map((s) => <option key={s} value={s}>{T.metas.estados[s]}</option>)}
+                    </select>
+                    {v.prazo && <span className="mt-chip mt-chip-prazo">{formatar(v.prazo, "MMM yyyy")}</span>}
+                  </div>
+                  <div className="mt-cartao-corpo">
+                    <div className="mt-cartao-texto">
+                      <b className="mt-cartao-titulo">{v.titulo}</b>
+                      {v.descricao && <span className="mt-cartao-descricao">{`“${v.descricao}”`}</span>}
                     </div>
-                    {v.descricao && <span className="texto-2" style={{ fontSize: 12 }}>{v.descricao}</span>}
-                    <div className="linha" style={{ flexWrap: "wrap" }}>
-                      <select className="seletor" style={{ height: 26, width: "auto", fontSize: 11 }} value={v.estado} aria-label={T.metas.estado} onChange={(e) => org.atualizarVisao(v.id, { estado: e.target.value as CartaoVisao["estado"] })}>
-                        {(Object.keys(T.metas.estados) as CartaoVisao["estado"][]).map((s) => <option key={s} value={s}>{T.metas.estados[s]}</option>)}
-                      </select>
-                      {v.prazo && <span className="etiqueta">{formatar(v.prazo, "MMM yyyy")}</span>}
+                    <div className="mt-cartao-rodape">
+                      <span className="mt-cartao-falta">{dias === null ? T.metas.semPrazo : T.metas.faltamDias(dias)}</span>
+                      <button type="button" className="mt-icone-excluir mt-icone-visivel" aria-label={T.geral.excluir} title={T.geral.excluir} onClick={() => { org.excluirVisao(v.id); avisar(T.geral.excluido); }}>
+                        <Trash2 size={13} />
+                      </button>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Cartao>
-      </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <Modal aberto={criandoPilar} titulo={T.metas.novoPilar} aoFechar={() => { setCriandoPilar(false); setErroPilar(""); }}>
+        <form
+          className="formulario"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!novoPilar.trim()) return setErroPilar(T.validacao.obrigatorio);
+            org.criarPilar(novoPilar);
+            setNovoPilar("");
+            setErroPilar("");
+            setCriandoPilar(false);
+          }}
+        >
+          <Campo id="mt-pilar-nome" rotulo={T.metas.nomePilar} obrigatorio erro={erroPilar}>
+            <input id="mt-pilar-nome" className="campo" value={novoPilar} maxLength={40} onChange={(e) => { setNovoPilar(e.target.value); setErroPilar(""); }} />
+          </Campo>
+          <div className="formulario-acoes">
+            <Botao onClick={() => { setCriandoPilar(false); setErroPilar(""); }}>{T.geral.cancelar}</Botao>
+            <Botao type="submit" variante="primario">{T.geral.criar}</Botao>
+          </div>
+        </form>
+      </Modal>
       <FormMeta aberto={novaMeta} aoFechar={() => setNovaMeta(false)} />
       <FormVisao aberto={novaVisao} aoFechar={() => setNovaVisao(false)} />
       <Modal aberto={!!atualizando} titulo={T.metas.atualizarValor} aoFechar={() => setAtualizando(null)}>

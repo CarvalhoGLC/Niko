@@ -1,27 +1,29 @@
 import { motion } from "motion/react";
 import { Check, ExternalLink, Image, MonitorX, Paintbrush, PanelBottom, PanelTop, Settings2, SunMoon, type LucideIcon } from "lucide-react";
-import { useConfig, type RepousoIlha, type Tema } from "../../../estado/configuracoes";
+import { ICONES_DA_BARRA, useConfig, type RepousoIlha, type Tema } from "../../../estado/configuracoes";
 import { useInterface } from "../../../estado/interface";
 import { useIlha } from "../../../estado/ilha";
 import { controle } from "../../../ponte/ponteLocal";
 import { tocarSom } from "../../../ponte/sons";
 import { DESTAQUE_PADRAO } from "../../area-de-trabalho/usarTema";
+import { mudarTema } from "../../area-de-trabalho/mudarTema";
 import { FUNDOS_PRONTOS } from "../../../modulos/configuracoes/SeletorDeFundo";
 import { FUNDO_DESTAQUE, hexValido, misturar, textoSobre } from "../../../utilitarios/cores";
 import { T } from "../../../textos/textos";
 import { usarMonitores } from "../../../desktop/desktop";
 import { TODOS_OS_MONITORES } from "../../dock/monitores";
+import { BUSCADORES, type Buscador } from "../../../utilitarios/buscaApps";
 
 const MONITOR_PRINCIPAL = "principal";
 
 const P = T.ilha.barra.personalizacao;
 const DESTAQUES_PRONTOS = ["#a78bfa", "#3b82f6", "#10b981", "#f59e0b", "#f4505e", "#ec4899"];
 
-function Escolha<V extends string>({ rotulo, valor, opcoes, aoMudar, grade = false, desativada = false }: { rotulo: string; valor: V; opcoes: { valor: V; rotulo: string }[]; aoMudar: (v: V) => void; grade?: boolean; desativada?: boolean }) {
+function Escolha<V extends string>({ rotulo, valor, opcoes, aoMudar, grade = false, desativada = false }: { rotulo: string; valor: V; opcoes: { valor: V; rotulo: string }[]; aoMudar: (v: V, origem: HTMLButtonElement) => void; grade?: boolean; desativada?: boolean }) {
   return (
     <div className="ilha-escolha" data-grade={grade || undefined} data-desativada={desativada || undefined} role="radiogroup" aria-label={rotulo} aria-disabled={desativada || undefined}>
       {opcoes.map((o) => (
-        <button key={o.valor} type="button" role="radio" aria-checked={valor === o.valor} className="ilha-escolha-opcao" disabled={desativada} onClick={() => aoMudar(o.valor)}>
+        <button key={o.valor} type="button" role="radio" aria-checked={valor === o.valor} className="ilha-escolha-opcao" disabled={desativada} onClick={(evento) => aoMudar(o.valor, evento.currentTarget)}>
           {o.rotulo}
         </button>
       ))}
@@ -88,6 +90,18 @@ export function Personalizacao({ topo, aoFechar }: { topo: number; aoFechar: () 
         { valor: "secundario", rotulo: P.monitores.secundario },
       ];
 
+  const monitorPrincipal = monitores.find((m) => m.principal);
+  const monitorDaIlha = variosMonitores && monitores.some((m) => m.nome === cfg.ilha.monitor && !m.principal) ? cfg.ilha.monitor : MONITOR_PRINCIPAL;
+  const opcoesDaIlha = variosMonitores
+    ? [
+        { valor: MONITOR_PRINCIPAL, rotulo: monitores.length === 2 ? P.monitores.principal : P.monitores.numero(monitorPrincipal?.numero ?? 1, true) },
+        ...monitores.filter((m) => !m.principal).map((m) => ({ valor: m.nome, rotulo: monitores.length === 2 ? P.monitores.secundario : P.monitores.numero(m.numero, false) })),
+      ]
+    : [
+        { valor: MONITOR_PRINCIPAL, rotulo: P.monitores.principal },
+        { valor: "secundario", rotulo: P.monitores.secundario },
+      ];
+
   const aplicarCor = (mudanca: { fundo?: string; opacidade?: number }) => {
     cfg.definirIlha(mudanca);
     cfg.definir({ dock: { ...useConfig.getState().dock, ...mudanca } });
@@ -106,7 +120,7 @@ export function Personalizacao({ topo, aoFechar }: { topo: number; aoFechar: () 
     >
       <Grupo icone={SunMoon} titulo={P.grupos.aparencia}>
         <Linha rotulo={P.temaDoNiko}>
-          <Escolha<Tema> rotulo={P.temaDoNiko} valor={cfg.tema} aoMudar={(tema) => cfg.definir({ tema })} opcoes={(["claro", "escuro", "sistema"] as Tema[]).map((t) => ({ valor: t, rotulo: P.temas[t] }))} />
+          <Escolha<Tema> rotulo={P.temaDoNiko} valor={cfg.tema} aoMudar={mudarTema} opcoes={(["claro", "escuro", "sistema"] as Tema[]).map((t) => ({ valor: t, rotulo: P.temas[t] }))} />
         </Linha>
         <Linha rotulo={P.destaque}>
           <div className="ilha-amostras">
@@ -147,8 +161,27 @@ export function Personalizacao({ topo, aoFechar }: { topo: number; aoFechar: () 
         <Linha rotulo={P.tamanhoDaIlha}>
           <Escolha rotulo={P.tamanhoDaIlha} valor={cfg.ilha.tamanho} aoMudar={(tamanho) => cfg.definirIlha({ tamanho })} opcoes={(["pequena", "media", "grande"] as const).map((t) => ({ valor: t, rotulo: T.configuracoes.tamanhos[t] }))} />
         </Linha>
+        <Linha rotulo={P.monitorDaIlha}>
+          <Escolha desativada={!variosMonitores} rotulo={P.monitorDaIlha} valor={monitorDaIlha} aoMudar={(monitor) => cfg.definirIlha({ monitor: monitor === MONITOR_PRINCIPAL ? "" : monitor })} opcoes={opcoesDaIlha} />
+        </Linha>
         <Linha rotulo={P.repouso}>
           <Escolha<RepousoIlha> grade rotulo={P.repouso} valor={cfg.ilha.repouso} aoMudar={(repouso) => cfg.definirIlha({ repouso })} opcoes={(Object.keys(T.configuracoes.repousos) as RepousoIlha[]).map((r) => ({ valor: r, rotulo: T.configuracoes.repousos[r] }))} />
+        </Linha>
+        <Linha rotulo={P.iconesDaBarra}>
+          <div className="ilha-escolha" role="group" aria-label={P.iconesDaBarra}>
+            {ICONES_DA_BARRA.map((icone) => (
+              <button
+                key={icone}
+                type="button"
+                role="checkbox"
+                aria-checked={cfg.ilha.iconesDaBarra[icone]}
+                className="ilha-escolha-opcao"
+                onClick={() => cfg.definirIlha({ iconesDaBarra: { ...cfg.ilha.iconesDaBarra, [icone]: !cfg.ilha.iconesDaBarra[icone] } })}
+              >
+                {P.icones[icone]}
+              </button>
+            ))}
+          </div>
         </Linha>
       </Grupo>
 
@@ -161,6 +194,9 @@ export function Personalizacao({ topo, aoFechar }: { topo: number; aoFechar: () 
               {P.monitores.naoReconhecido}
             </span>
           )}
+        </Linha>
+        <Linha rotulo={P.buscador}>
+          <Escolha<Buscador> rotulo={P.buscador} valor={cfg.dock.buscador} aoMudar={(buscador) => cfg.definir({ dock: { ...useConfig.getState().dock, buscador } })} opcoes={BUSCADORES.map((b) => ({ valor: b, rotulo: P.buscadores[b] }))} />
         </Linha>
       </Grupo>
       <div className="ilha-personalizar-rodape">

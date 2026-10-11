@@ -1,6 +1,6 @@
-export type FerramentaDeCodigo = "claude" | "codex" | "copilot" | "opencode" | "antigravity" | "kimi";
+export type FerramentaDeCodigo = "claude" | "codex" | "copilot" | "opencode" | "antigravity" | "kimi" | "gemini" | "amp";
 
-export const FERRAMENTAS_DE_CODIGO: FerramentaDeCodigo[] = ["claude", "codex", "copilot", "opencode", "antigravity", "kimi"];
+export const FERRAMENTAS_DE_CODIGO: FerramentaDeCodigo[] = ["claude", "codex", "copilot", "opencode", "antigravity", "kimi", "gemini", "amp"];
 
 export const FERRAMENTAS_QUE_APROVAM: FerramentaDeCodigo[] = ["claude", "codex", "copilot"];
 
@@ -62,7 +62,10 @@ export const claudeCode = {
   instalar: () => pedir<{ caminho: string; copia: string | null }>("instalar", { method: "POST", body: JSON.stringify({ confirmacao: "INSTALAR" }) }),
   remover: () => pedir<{ caminho: string; copia: string | null }>("remover", { method: "POST", body: JSON.stringify({ confirmacao: "REMOVER" }) }),
   decidir: (pedidoId: string, decisao: "allow" | "deny" | "terminal", regra?: RegraSugerida) => pedir<{ ok: boolean }>("decisao", { method: "POST", body: JSON.stringify({ pedidoId, decisao, regra }) }),
+  responder: (pedidoId: string, respostas: number[][]) => pedir<{ ok: boolean }>("decisao", { method: "POST", body: JSON.stringify({ pedidoId, decisao: "allow", respostas }) }),
   abrir: (cwd: string, como: "vscode" | "pasta") => pedir<{ ok: boolean }>("abrir", { method: "POST", body: JSON.stringify({ cwd, como }) }),
+  terminal: (sessao: string) => pedir<{ ok: boolean }>("terminal", { method: "POST", body: JSON.stringify({ sessao }) }),
+  abrirArquivo: (cwd: string, arquivo: string) => pedir<{ ok: boolean }>("abrir", { method: "POST", body: JSON.stringify({ cwd, como: "arquivo", arquivo }) }),
 };
 
 async function pedirAgentes<T>(caminho: string, opcoes: RequestInit = {}): Promise<T> {

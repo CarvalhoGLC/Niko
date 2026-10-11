@@ -1,8 +1,10 @@
 import { useEffect } from "react";
-import { CheckCircle2, Download, ExternalLink, Globe, History, RefreshCw } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Download, Globe, History, RefreshCw } from "lucide-react";
+import { useInterface } from "../../estado/interface";
+import { novidadesAte, type VersaoComNovidades } from "../../utilitarios/novidades";
+import { formatar } from "../../utilitarios/datas";
 import { CabecalhoAba } from "../../componentes/CabecalhoAba";
-import { AvisoFaixa, Botao, Cartao, Progresso } from "../../componentes/basicos";
-import { LogoNiko } from "../../componentes/LogoNiko";
+import { AvisoFaixa, Botao, Progresso } from "../../componentes/basicos";
 import { Marca } from "../../marcas/Marca";
 import { useAtualizacao } from "../../estado/atualizacao";
 import { NATIVO } from "../../desktop/desktop";
@@ -10,6 +12,26 @@ import { T } from "../../textos/textos";
 
 const REPOSITORIO = "https://github.com/vitorcgo/niko";
 const VERSOES = `${REPOSITORIO}/releases`;
+
+function LinhaDaVersao({ versao: v, atual }: { versao: VersaoComNovidades; atual?: boolean }) {
+  return (
+    <section className="atualizacao-versao-linha" aria-label={`v${v.versao}`}>
+      <div className="atualizacao-versao-lado">
+        <span className="atualizacao-versao-rotulo">{v.versao}</span>
+        {"data" in v && v.data && <span className="atualizacao-versao-data">{formatar(v.data, "dd/MM/yyyy")}</span>}
+        {atual && <span className="atualizacao-esta">{T.atualizacao.estaVersao}</span>}
+      </div>
+      <ul className="atualizacao-versao-itens">
+        {v.mudancas.map(([tipo, texto]) => (
+          <li key={texto} data-tipo={tipo}>
+            <span className="atualizacao-tipo">{T.atualizacao.tiposDeMudanca[tipo]}</span>
+            <span className="atualizacao-texto">{texto}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 export default function Atualizacao() {
   const atualizacao = useAtualizacao();
@@ -22,63 +44,103 @@ export default function Atualizacao() {
     : atualizacao.verificacao === "sem_versoes" ? T.atualizacao.semVersoes
     : disponivel ? T.atualizacao.disponivel(atualizacao.versao)
     : T.atualizacao.pronto;
+  const situacao = ocupada ? "ocupada" : disponivel ? "disponivel" : atualizacao.verificacao === "atualizado" ? "atualizado" : "neutra";
+
+  const versoes = novidadesAte(atualizacao.versaoAtual);
+  const parametros = useInterface((s) => s.parametros);
 
   useEffect(() => {
     void useAtualizacao.getState().carregarVersao();
   }, []);
 
+  useEffect(() => {
+    if (parametros.secao !== "novidades" || versoes.length === 0) return;
+    document.getElementById("novidades")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [parametros.secao, versoes.length]);
+
   return (
     <>
       <CabecalhoAba titulo={T.atualizacao.titulo} subtitulo={T.atualizacao.subtitulo} />
-      <div className="atualizacao-layout">
-        <div className="atualizacao-principal">
-        <Cartao>
-          <div className="atualizacao-produto">
-            <div className="atualizacao-logo"><LogoNiko tamanho={56} /></div>
-            <div className="coluna" style={{ gap: 4 }}>
-              <h2 className="titulo-secao">{T.app.nome}</h2>
-              <span className="texto-2">{T.atualizacao.plataforma}</span>
-            </div>
-            <div className="atualizacao-versao">
-              <span className="rotulo-pequeno">{T.atualizacao.versaoAtual}</span>
-              <strong className="numero">{atualizacao.versaoAtual ? `v${atualizacao.versaoAtual}` : T.geral.carregando}</strong>
-            </div>
-          </div>
-          <div className="atualizacao-estado" role="status" aria-live="polite" aria-busy={ocupada}>
-            {atualizacao.verificacao === "atualizado" ? <CheckCircle2 size={22} className="atualizacao-ok" /> : disponivel ? <Download size={22} /> : <RefreshCw size={22} className={ocupada ? "atualizacao-girando" : ""} />}
-            <span>{tituloEstado}</span>
-          </div>
+      <section className="atualizacao-painel">
+        <div className="atualizacao-versao">
+          <span className="rotulo-secao">{T.atualizacao.versaoAtual}</span>
+          <strong className="atualizacao-versao-numero">{atualizacao.versaoAtual || T.geral.carregando}</strong>
+          <span className="atualizacao-versao-detalhe">
+            {T.atualizacao.plataforma}
+            {atualizacao.ultimaVerificacao && (
+              <>
+                {" · "}
+                {T.atualizacao.ultimaVerificacao}: <time dateTime={atualizacao.ultimaVerificacao}>{new Date(atualizacao.ultimaVerificacao).toLocaleString("pt-BR")}</time>
+              </>
+            )}
+          </span>
+        </div>
+        <div className="atualizacao-estado" data-situacao={situacao}>
+          <span className="atualizacao-estado-titulo" role="status" aria-live="polite" aria-busy={ocupada}>
+            {ocupada ? <RefreshCw size={14} className="atualizacao-girando" /> : <span className="atualizacao-ponto" />}
+            {tituloEstado}
+          </span>
+          {disponivel && <span className="atualizacao-estado-dica">{atualizacao.automatica ? T.atualizacao.instalacaoDica : NATIVO ? T.atualizacao.baixarManual : T.atualizacao.baixarNavegador}</span>}
           {atualizacao.erro && <AvisoFaixa tipo="erro">{atualizacao.erro}</AvisoFaixa>}
           {(atualizacao.fase === "baixando" || atualizacao.fase === "instalando") && <Progresso valor={atualizacao.progresso} rotulo={tituloEstado} />}
           <div className="atualizacao-acoes">
-            <Botao variante={disponivel ? "secundario" : "primario"} icone={<RefreshCw size={15} />} disabled={ocupada} onClick={() => void atualizacao.verificar(true)}>{atualizacao.verificacao === "verificando" ? T.atualizacao.verificando : T.atualizacao.verificar}</Botao>
             {disponivel && (atualizacao.automatica ? (
-              <Botao variante="primario" icone={<Download size={15} />} disabled={ocupada} onClick={() => void atualizacao.instalar()}>{T.atualizacao.instalar}</Botao>
+              <Botao variante="primario" className="atualizacao-botao" icone={<Download size={13} />} disabled={ocupada} onClick={() => void atualizacao.instalar()}>{T.atualizacao.instalar}</Botao>
             ) : (
-              <a className="botao botao-primario" href={`${VERSOES}/latest`} target="_blank" rel="noopener noreferrer"><Download size={15} />{T.atualizacao.baixarGithub}</a>
+              <a className="botao botao-primario atualizacao-botao" href={`${VERSOES}/latest`} target="_blank" rel="noopener noreferrer"><Download size={13} />{T.atualizacao.baixarGithub}</a>
             ))}
+            <Botao variante={disponivel ? "secundario" : "primario"} className="atualizacao-botao" data-contorno={disponivel || undefined} icone={<RefreshCw size={13} />} disabled={ocupada} onClick={() => void atualizacao.verificar(true)}>
+              {atualizacao.verificacao === "verificando" ? T.atualizacao.verificando : T.atualizacao.verificar}
+            </Botao>
           </div>
-          {disponivel && <p className="texto-3">{atualizacao.automatica ? T.atualizacao.instalacaoDica : NATIVO ? T.atualizacao.baixarManual : T.atualizacao.baixarNavegador}</p>}
-          {atualizacao.ultimaVerificacao && <p className="texto-3">{T.atualizacao.ultimaVerificacao}: <time dateTime={atualizacao.ultimaVerificacao}>{new Date(atualizacao.ultimaVerificacao).toLocaleString("pt-BR")}</time></p>}
-        </Cartao>
-        <div className="atualizacao-links">
-          <a href={REPOSITORIO} target="_blank" rel="noopener noreferrer"><Marca marca="github" tamanho={20} monocromatica /><span>{T.atualizacao.github}<small>github.com/vitorcgo/niko</small></span><ExternalLink size={14} /></a>
-          <a href="https://nikoapp-eight.vercel.app/" target="_blank" rel="noopener noreferrer"><Globe size={20} /><span>{T.atualizacao.site}<small>nikoapp-eight.vercel.app</small></span><ExternalLink size={14} /></a>
-          <a href={VERSOES} target="_blank" rel="noopener noreferrer"><History size={20} /><span>{T.atualizacao.versoes}<small>{T.app.nome}</small></span><ExternalLink size={14} /></a>
         </div>
-        </div>
-        <Cartao>
-          <div className="atualizacao-criador">
-            <img className="atualizacao-foto" src="/criador-vitor.jpg" width={88} height={88} alt={T.atualizacao.fotoCriador} />
-            <span className="rotulo-pequeno">{T.atualizacao.criador}</span>
-            <h2 className="titulo-secao">{T.atualizacao.nomeCriador}</h2>
-            <span className="texto-3">{T.atualizacao.usuarioCriador}</span>
-            <p className="texto-2">{T.atualizacao.descricaoCriador}</p>
-            <a className="botao botao-secundario" href="https://github.com/vitorcgo" target="_blank" rel="noopener noreferrer"><Marca marca="github" tamanho={16} monocromatica />{T.atualizacao.githubCriador}<ExternalLink size={13} /></a>
+      </section>
+      {(versoes.length > 0 || (disponivel && atualizacao.notas)) && (
+        <section className="atualizacao-novidades" id="novidades">
+          <div className="atualizacao-novidades-topo">
+            <h2 className="atualizacao-novidades-titulo">{T.atualizacao.oQueMudou}</h2>
+            <span className="atualizacao-novidades-dica">{T.atualizacao.oQueMudouDica}</span>
           </div>
-        </Cartao>
-        {disponivel && atualizacao.notas && <div className="atualizacao-notas"><Cartao titulo={T.atualizacao.novidades}><p>{atualizacao.notas}</p></Cartao></div>}
-      </div>
+          {disponivel && atualizacao.notas && (
+            <div className="atualizacao-versao-linha">
+              <div className="atualizacao-versao-lado">
+                <span className="atualizacao-versao-rotulo">{atualizacao.versao}</span>
+                <span className="atualizacao-versao-data">{T.atualizacao.versaoDisponivel}</span>
+              </div>
+              <div className="atualizacao-versao-itens">
+                <span className="atualizacao-rotulo-notas">{T.atualizacao.novidades}</span>
+                <p className="atualizacao-notas">{atualizacao.notas}</p>
+              </div>
+            </div>
+          )}
+          {versoes.slice(0, 1).map((v) => <LinhaDaVersao key={v.versao} versao={v} atual />)}
+          {versoes.length > 1 && (
+            <details className="atualizacao-gaveta">
+              <summary className="atualizacao-gaveta-botao">
+                <ChevronDown size={14} className="atualizacao-gaveta-seta" />
+                {T.atualizacao.versoesAnteriores(versoes.length - 1)}
+              </summary>
+              <div className="atualizacao-gaveta-conteudo">
+                {versoes.slice(1).map((v) => <LinhaDaVersao key={v.versao} versao={v} />)}
+              </div>
+            </details>
+          )}
+        </section>
+      )}
+      <section className="atualizacao-criador">
+        <img className="atualizacao-foto" src="/criador-vitor.jpg" width={56} height={56} alt={T.atualizacao.fotoCriador} />
+        <span className="atualizacao-criador-texto">
+          <span className="rotulo-secao">{T.atualizacao.criador}</span>
+          <b className="atualizacao-criador-nome">{T.atualizacao.nomeCriador} <span>{T.atualizacao.usuarioCriador}</span></b>
+          <span className="atualizacao-criador-descricao">{T.atualizacao.descricaoCriador}</span>
+        </span>
+        <nav className="atualizacao-links" aria-label={T.app.nome}>
+          <a href={REPOSITORIO} target="_blank" rel="noopener noreferrer"><Marca marca="github" tamanho={13} monocromatica />{T.atualizacao.github}<ArrowUpRight size={12} className="atualizacao-link-seta" /></a>
+          <a href="https://nikoapp-eight.vercel.app/" target="_blank" rel="noopener noreferrer"><Globe size={13} />{T.atualizacao.site}<ArrowUpRight size={12} className="atualizacao-link-seta" /></a>
+          <a href={VERSOES} target="_blank" rel="noopener noreferrer"><History size={13} />{T.atualizacao.versoes}<ArrowUpRight size={12} className="atualizacao-link-seta" /></a>
+          <a href="https://github.com/vitorcgo" target="_blank" rel="noopener noreferrer"><img src="/criador-vitor.jpg" width={16} height={16} alt="" className="atualizacao-link-foto" />{T.atualizacao.githubCriador}<ArrowUpRight size={12} className="atualizacao-link-seta" /></a>
+        </nav>
+      </section>
     </>
   );
 }

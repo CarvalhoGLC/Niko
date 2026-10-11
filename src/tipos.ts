@@ -24,7 +24,8 @@ export type Rota =
   | "ia"
   | "consumo"
   | "conquistas"
-  | "configuracoes";
+  | "configuracoes"
+  | "agentes";
 
 export type StatusTarefa = "a_fazer" | "em_andamento" | "concluida" | "reagendada" | "cancelada" | "em_aguardo";
 
@@ -63,6 +64,7 @@ export interface Habito {
   meta: number;
   unidade: string;
   arquivado: boolean;
+  hora?: string;
 }
 
 export type Humor = "otimo" | "bom" | "neutro" | "dificil";
@@ -180,10 +182,13 @@ export interface SessaoPomodoro {
 
 export type TipoConta = "corrente" | "poupanca" | "carteira" | "cartao" | "investimento";
 
+export type Moeda = "BRL" | "USD" | "EUR";
+
 export interface Conta {
   id: string;
   nome: string;
   tipo: TipoConta;
+  moeda?: Moeda;
   saldoInicial: number;
   cor: string;
   fechamentoDia?: number;
@@ -210,6 +215,7 @@ export interface Transacao {
   categoriaId?: string;
   contaId: string;
   contaDestinoId?: string;
+  valorDestino?: number;
   data: string;
   recorrenteId?: string;
   grupoParcelasId?: string;
@@ -335,12 +341,14 @@ export interface Evento {
   tipo: "evento" | "lembrete";
   repeticao: Repeticao;
   ultimoDisparo?: string;
+  excecoes?: string[];
+  feitos?: string[];
 }
 
 export interface CartaoConfirmacao {
-  tipo: "gasto" | "receita" | "dividir" | "tarefa" | "lembrete" | "evento" | "concluir" | "habito" | "compra" | "memoria" | "rascunho" | "email";
+  tipo: "gasto" | "receita" | "dividir" | "tarefa" | "lembrete" | "evento" | "concluir" | "eventoFeito" | "habito" | "novoHabito" | "compra" | "memoria" | "rascunho" | "email";
   dados: Record<string, string | number | string[]>;
-  situacao: "pendente" | "confirmado" | "cancelado";
+  situacao: "pendente" | "confirmado" | "cancelado" | "verificar";
 }
 
 export interface Mensagem {
@@ -386,7 +394,7 @@ export interface Memoria {
   data: string;
 }
 
-export type ServicoId = "stripe" | "github" | "vercel" | "resend" | "notion" | "calcom" | "n8n" | "gmail" | "supabase" | "cloudflare";
+export type ServicoId = "stripe" | "github" | "vercel" | "resend" | "notion" | "calcom" | "n8n" | "google" | "supabase" | "cloudflare";
 
 export type StatusConexao = "conectado" | "sem_chave" | "erro" | "pausado" | "sem_internet";
 
@@ -407,6 +415,7 @@ export interface Conexao {
   ultimaAtualizacao?: string;
   resumo: string;
   fixadaNaIlha: boolean;
+  falhasVistasEm?: string;
 }
 
 export interface UsoIa {

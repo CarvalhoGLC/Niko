@@ -4,6 +4,12 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewWindow};
+#[cfg(windows)]
+use windows::Win32::Foundation::{HWND, RECT};
+#[cfg(windows)]
+use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+#[cfg(not(windows))]
+use crate::barra_windows::RECT;
 
 use crate::{barra_windows, criar_sobreposta, Estado, ALTURA_DOCK, ALTURA_ILHA};
 
@@ -15,6 +21,7 @@ static LIGADO: AtomicBool = AtomicBool::new(false);
 static ESCOLHA: Mutex<String> = Mutex::new(String::new());
 static ASSINATURA: Mutex<String> = Mutex::new(String::new());
 static SINCRONIZANDO: Mutex<()> = Mutex::new(());
+static MONITOR_DA_ILHA: Mutex<String> = Mutex::new(String::new());
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -72,7 +79,7 @@ pub fn monitor_escolhido(escolha: &str, info: &MonitorDoNiko, lista: &[MonitorDo
     info.principal
 }
 
-pub fn posicionar(janela: &WebviewWindow, monitor: &Monitor) {
+pub fn posicionar(janela: &WebviewWindow, monitor: &Monitor) -> bool {
     let escala = monitor.scale_factor();
     let (posicao, tamanho) = if barra_windows::barra_oculta() {
         (*monitor.position(), *monitor.size())
@@ -81,15 +88,41 @@ pub fn posicionar(janela: &WebviewWindow, monitor: &Monitor) {
         (area.position, area.size)
     };
     let altura = (ALTURA_DOCK * escala).round() as i32;
-    let destino = PhysicalPosition::new(posicao.x, posicao.y + tamanho.height as i32 - altura);
+    let reserva = barra_windows::retangulo_reservado(janela, monitor);
+    let limites = barra_windows::retangulo_da_sobreposta(reserva.unwrap_or(RECT { left: posicao.x, top: posicao.y, right: posicao.x + tamanho.width as i32, bottom: posicao.y + tamanho.height as i32 }), altura);
+    #[cfg(windows)]
+    {
+        if let Ok(h) = janela.hwnd() {
+            let mut atual = RECT::default();
+            if unsafe { GetWindowRect(HWND(h.0), &mut atual) }.is_ok() && atual.left == limites.left && atual.top == limites.top && atual.right == limites.right && atual.bottom == limites.bottom { return false; }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let (Ok(p), Ok(t)) = (janela.outer_position(), janela.outer_size()) {
+            if p.x == limites.left && p.y == limites.top && t.width as i32 == limites.right - limites.left && t.height as i32 == altura { return false; }
+        }
+    }
+    let destino = PhysicalPosition::new(limites.left, limites.top);
     let _ = janela.set_position(destino);
-    let _ = janela.set_size(PhysicalSize::new(tamanho.width, altura as u32));
+    let _ = janela.set_size(PhysicalSize::new((limites.right - limites.left) as u32, altura as u32));
     let _ = janela.set_position(destino);
+    true
+}
+
+pub fn monitor_da_ilha(escolha: &str, lista: &[MonitorDoNiko]) -> usize {
+    lista.iter().position(|m| !escolha.is_empty() && m.nome == escolha).unwrap_or(0)
 }
 
 pub fn posicionar_ilha(app: &AppHandle) {
     let Some(janela) = app.get_webview_window("ilha") else { return };
-    let Some((monitor, _)) = monitores_ordenados(app).into_iter().next() else { return };
+    let escolha = MONITOR_DA_ILHA.lock().map(|e| e.clone()).unwrap_or_default();
+    let mut monitores = monitores_ordenados(app);
+    if monitores.is_empty() {
+        return;
+    }
+    let infos: Vec<MonitorDoNiko> = monitores.iter().map(|(_, i)| i.clone()).collect();
+    let (monitor, _) = monitores.swap_remove(monitor_da_ilha(&escolha, &infos));
     let altura = (ALTURA_ILHA * monitor.scale_factor()).round() as u32;
     let destino = *monitor.position();
     let _ = janela.set_position(destino);
@@ -99,11 +132,21 @@ pub fn posicionar_ilha(app: &AppHandle) {
 
 pub fn _reposicionar_todos(app: &AppHandle) {
     posicionar_ilha(app);
+    posicionar_assistive(app);
     for (monitor, info) in monitores_ordenados(app) {
         if let Some(janela) = app.get_webview_window(&info.rotulo) {
             posicionar(&janela, &monitor);
         }
     }
+}
+
+pub fn posicionar_assistive(app: &AppHandle) {
+    let Some(janela) = app.get_webview_window("assistive") else { return };
+    let Some(monitor) = monitores_ordenados(app).into_iter().next().map(|(m, _)| m) else { return };
+    let area = monitor.work_area();
+    let _ = janela.set_position(area.position);
+    let _ = janela.set_size(area.size);
+    let _ = janela.set_position(area.position);
 }
 
 fn assinatura(lista: &[(Monitor, MonitorDoNiko)]) -> String {
@@ -151,6 +194,7 @@ pub fn sincronizar(app: &AppHandle) {
     }
 
     posicionar_ilha(app);
+    posicionar_assistive(app);
     if let Ok(mut atual) = ASSINATURA.lock() {
         *atual = assinatura(&monitores);
     }
@@ -171,13 +215,26 @@ pub async fn definir_docks(app: AppHandle, ligado: bool, escolha: String) {
     sincronizar(&app);
 }
 
+#[tauri::command]
+pub fn definir_monitor_da_ilha(app: AppHandle, escolha: String) {
+    if let Ok(mut atual) = MONITOR_DA_ILHA.lock() {
+        *atual = escolha.chars().take(200).collect();
+    }
+    posicionar_ilha(&app);
+}
+
 pub fn vigiar_monitores(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(INTERVALO_DOS_MONITORES);
-        let atual = assinatura(&monitores_ordenados(&app));
-        let mudou = ASSINATURA.lock().map(|a| *a != atual).unwrap_or(false);
-        if mudou {
-            sincronizar(&app);
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(INTERVALO_DOS_MONITORES).await;
+            if crate::ENCERRANDO.load(Ordering::Relaxed) { return; }
+            let alvo = app.clone();
+            if tauri::async_runtime::spawn_blocking(move || {
+                if crate::ENCERRANDO.load(Ordering::Relaxed) { return; }
+                let atual = assinatura(&monitores_ordenados(&alvo));
+                let mudou = ASSINATURA.lock().map(|a| *a != atual).unwrap_or(false);
+                if mudou && !crate::ENCERRANDO.load(Ordering::Relaxed) { sincronizar(&alvo); }
+            }).await.is_err() { return; }
         }
     });
 }

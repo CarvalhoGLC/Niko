@@ -30,7 +30,39 @@ public static class NikoJanelas {
   [DllImport("user32.dll")] static extern IntPtr MonitorFromRect(ref Retangulo r, uint f);
   [DllImport("user32.dll")] static extern bool GetWindowPlacement(IntPtr h, ref Posicionamento p);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr m, ref InfoDoMonitor i);
-  public class Info { public long Id; public uint Pid; public string Titulo; public bool Minimizada; public bool Ativa; public string Monitor; }
+  [StructLayout(LayoutKind.Sequential, Pack = 4)] public struct ChaveDePropriedade { public Guid Formato; public uint Id; }
+  [StructLayout(LayoutKind.Sequential)] public struct ValorDePropriedade { public ushort Tipo; public ushort R1, R2, R3; public IntPtr Ponteiro; public IntPtr Extra; }
+  [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IPropertyStore {
+    [PreserveSig] int GetCount(out uint n);
+    [PreserveSig] int GetAt(uint i, out ChaveDePropriedade k);
+    [PreserveSig] int GetValue(ref ChaveDePropriedade k, out ValorDePropriedade v);
+    [PreserveSig] int SetValue(ref ChaveDePropriedade k, ref ValorDePropriedade v);
+    [PreserveSig] int Commit();
+  }
+  [DllImport("shell32.dll")] static extern int SHGetPropertyStoreForWindow(IntPtr h, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore p);
+  [DllImport("ole32.dll")] static extern int PropVariantClear(ref ValorDePropriedade v);
+  static readonly Guid FORMATO_DO_APP = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
+  static Guid INTERFACE_DAS_PROPRIEDADES = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+  static string LerPropriedade(IPropertyStore p, uint id) {
+    var k = new ChaveDePropriedade { Formato = FORMATO_DO_APP, Id = id };
+    ValorDePropriedade v;
+    if (p.GetValue(ref k, out v) != 0) return null;
+    string s = v.Tipo == 31 && v.Ponteiro != IntPtr.Zero ? Marshal.PtrToStringUni(v.Ponteiro) : null;
+    PropVariantClear(ref v);
+    return string.IsNullOrEmpty(s) ? null : s;
+  }
+  static void LerIdentidade(IntPtr h, Info info) {
+    IPropertyStore p = null;
+    try {
+      if (SHGetPropertyStoreForWindow(h, ref INTERFACE_DAS_PROPRIEDADES, out p) != 0 || p == null) return;
+      info.Grupo = LerPropriedade(p, 5);
+      if (info.Grupo == null) return;
+      info.IconeDoGrupo = LerPropriedade(p, 3);
+      info.NomeDoGrupo = LerPropriedade(p, 4);
+    } catch { } finally { if (p != null) Marshal.ReleaseComObject(p); }
+  }
+  public class Info { public long Id; public uint Pid; public string Titulo; public bool Minimizada; public bool Ativa; public string Monitor; public string Grupo; public string IconeDoGrupo; public string NomeDoGrupo; }
   static string MonitorDa(IntPtr h) {
     IntPtr m;
     if (IsIconic(h)) {
@@ -68,7 +100,9 @@ public static class NikoJanelas {
       GetWindowText(h, sb, 300);
       if (sb.Length == 0) return true;
       uint pid; GetWindowThreadProcessId(h, out pid);
-      lista.Add(new Info { Id = h.ToInt64(), Pid = pid, Titulo = sb.ToString(), Minimizada = IsIconic(h), Ativa = h == frente && !IsIconic(h), Monitor = MonitorDa(h) });
+      var info = new Info { Id = h.ToInt64(), Pid = pid, Titulo = sb.ToString(), Minimizada = IsIconic(h), Ativa = h == frente && !IsIconic(h), Monitor = MonitorDa(h) };
+      LerIdentidade(h, info);
+      lista.Add(info);
       return true;
     }, IntPtr.Zero);
     return lista;
@@ -114,6 +148,23 @@ function Icone($caminho) {
   $icones[$caminho] = $valor
   return $valor
 }
+function IconeDoGrupo($recurso) {
+  if (-not $recurso) { return $null }
+  $arquivo = ($recurso -replace ',-?\d+$', '').Trim('"')
+  if (-not $arquivo.ToLower().EndsWith('.ico') -or -not (Test-Path -LiteralPath $arquivo -PathType Leaf)) { return $null }
+  $chave = $arquivo + '|' + (Get-Item -LiteralPath $arquivo).LastWriteTimeUtc.Ticks
+  if ($icones.ContainsKey($chave)) { return $icones[$chave] }
+  $valor = $null
+  try {
+    $ico = New-Object System.Drawing.Icon($arquivo, 48, 48)
+    $bmp = $ico.ToBitmap()
+    $mem = New-Object System.IO.MemoryStream
+    $bmp.Save($mem, [System.Drawing.Imaging.ImageFormat]::Png)
+    $valor = 'data:image/png;base64,' + [Convert]::ToBase64String($mem.ToArray())
+  } catch { }
+  $icones[$chave] = $valor
+  return $valor
+}
 while ($true) {
   $linha = [Console]::In.ReadLine()
   if ($null -eq $linha) { break }
@@ -131,7 +182,8 @@ while ($true) {
         }
         $info = $caminhos[$j.Pid]
         if ($info.nome -eq 'niko' -or ($info.nome -eq 'ApplicationFrameHost' -and $j.Titulo -eq '')) { continue }
-        $lista += @{ id = [string]$j.Id; pid = $j.Pid; titulo = $j.Titulo; minimizada = $j.Minimizada; ativa = $j.Ativa; app = $info.nome; nome = $(if ($info.descricao) { $info.descricao } else { $info.nome }); caminho = $info.caminho; icone = (Icone $info.caminho); monitor = $j.Monitor }
+        $iconeDoGrupo = IconeDoGrupo $j.IconeDoGrupo
+        $lista += @{ id = [string]$j.Id; pid = $j.Pid; titulo = $j.Titulo; minimizada = $j.Minimizada; ativa = $j.Ativa; app = $info.nome; nome = $(if ($info.descricao) { $info.descricao } else { $info.nome }); caminho = $info.caminho; icone = $(if ($iconeDoGrupo) { $iconeDoGrupo } else { Icone $info.caminho }); monitor = $j.Monitor; grupo = $j.Grupo; nomeDoGrupo = $j.NomeDoGrupo }
       }
       $r = @{ janelas = $lista }
     }
