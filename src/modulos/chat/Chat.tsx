@@ -16,8 +16,7 @@ import { useInterface } from "../../estado/interface";
 import { useConversando, enviarAoTime, pararResposta, tentarDeNovo, usarSugestao } from "../../estado/conversando";
 import { T } from "../../textos/textos";
 import { formatar } from "../../utilitarios/datas";
-import { contem, normalizarTexto } from "../../utilitarios/basicos";
-import { exportarArquivo } from "../../ponte/exportacao";
+import { baixarArquivo, contem, normalizarTexto } from "../../utilitarios/basicos";
 import { provedoresEmOrdem, escolherAgente, type ProvedorEmUso } from "../../utilitarios/assistente";
 import { catalogoPelaUrl } from "../../dados/provedoresIa";
 import { EVENTO_NOVO } from "../../janelas/area-de-trabalho/usarAtalhos";
@@ -327,7 +326,7 @@ export default function Chat() {
   const exportar = () => {
     if (!atual) return;
     const md = [`# ${atual.titulo || T.chat.novaConversa}`, "", ...atual.mensagens.map((m) => `**${m.autor === "usuario" ? T.barraLateral.perfil : nomes[m.agenteId]}** (${formatar(m.criadaEm, "dd/MM HH:mm")})\n\n${m.texto}\n`)].join("\n");
-    void exportarArquivo(`conversa-${atual.id.slice(0, 8)}.md`, md, { tipo: "text/markdown" });
+    baixarArquivo(`conversa-${atual.id.slice(0, 8)}.md`, md, "text/markdown");
   };
 
   const novaConversa = () => {

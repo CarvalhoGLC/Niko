@@ -4,11 +4,10 @@
   bottom: 0;
   translate: -50% 0;
   z-index: 999;
-  --dock-escala: 1;
-  padding: 0 calc(14px * var(--dock-escala));
+  padding: 0 14px;
   display: flex;
   align-items: center;
-  gap: calc(8px * var(--dock-escala));
+  gap: 8px;
   --d-rgb: var(--borda-rgb, 255, 255, 255);
   border-radius: 18px 18px 0 0;
   color: rgba(var(--d-rgb), 0.96);
@@ -61,22 +60,7 @@
   border-radius: 12px;
 }
 
-.dock-windows { display: block; width: calc(19px * var(--dock-escala)); height: calc(19px * var(--dock-escala)); background: currentColor; mask: url("./windows11.svg") center / contain no-repeat; }
-
-.dock-icone > img {
-  width: calc(26px * var(--dock-escala));
-  height: calc(26px * var(--dock-escala));
-}
-
-.dock-icone > svg {
-  width: calc(19px * var(--dock-escala));
-  height: calc(19px * var(--dock-escala));
-}
-
-.dock-logo > * {
-  width: calc(28px * var(--dock-escala));
-  height: calc(28px * var(--dock-escala));
-}
+.dock-windows { display: block; width: 19px; height: 19px; background: currentColor; mask: url("./windows11.svg") center / contain no-repeat; }
 
 .dock-menu {
   position: absolute;
@@ -127,7 +111,7 @@
 
 .dock-separador {
   width: 1px;
-  height: calc(26px * var(--dock-escala));
+  height: 26px;
   background: rgba(var(--d-rgb), 0.16);
 }
 
