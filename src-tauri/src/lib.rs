@@ -380,10 +380,17 @@ fn iniciar_ponte(app: &AppHandle, token: &str, reinicio: bool) {
     let node = if cfg!(windows) {
         recursos.join("node.exe")
     } else {
-        let embutido = recursos.join("node");
-        if embutido.exists() { embutido } else { std::path::PathBuf::from("node") }
+        recursos.join("node")
     };
+    if !node.exists() {
+        registrar(format!("Node embutido não encontrado: {}", node.display()));
+        return;
+    }
     let script = recursos.join("ponte.mjs");
+    if !script.exists() {
+        registrar(format!("Script da ponte não encontrado: {}", script.display()));
+        return;
+    }
     let saida_erro = dados.as_ref().and_then(|p| {
         let caminho = sem_prefixo(p.join("ponte.log"));
         if reinicio {
