@@ -33,10 +33,11 @@
                                 "icons/icon.ico"
                             ],
                    "resources":  {
-                                     "recursos/node.exe":  "recursos/node.exe",
-                                     "recursos/node": "recursos/node",
-                                     "recursos/ponte.mjs":  "recursos/ponte.mjs"
+                        "recursos/ponte.mjs":  "recursos/ponte.mjs"
                                  },
+                    "externalBin": [
+                        "recursos/node"
+                    ],
                    "publisher":  "vitorcgo",
                    "shortDescription":  "Niko, seu sistema de vida para Windows",
                    "windows":  {

@@ -7,7 +7,7 @@
       "icons/128x128@2x.png"
     ],
     "resources": {
-      "recursos/node.exe": null,
+      "recursos/node": true,
       "recursos/ponte.mjs": "recursos/ponte.mjs"
     },
     "shortDescription": "Niko, seu sistema de vida",

@@ -11,7 +11,7 @@
         "verificar": "tsc",
         "test": "node scripts/testar.mjs",
         "personagens": "node scripts/preparar-personagens.mjs",
-        "ponte:build": "node scripts/construir-ponte.mjs",
+        "ponte:build": "NIKO_NODE_BIN=${NIKO_NODE_BIN:-src-tauri/recursos/node-x86_64-unknown-linux-gnu} node scripts/construir-ponte.mjs",
         "tauri": "tauri",
         "app": "tauri build",
         "lancar": "node scripts/lancar-versao.mjs",

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::process::{Child, Command};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
 use std::sync::atomic::AtomicIsize;
@@ -11,6 +11,8 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::ShortcutState;
+use tauri_plugin_shell::ShellExt;
+use tauri_plugin_shell::process::CommandChild; 
 
 mod atalhos;
 #[cfg(windows)]
@@ -46,7 +48,7 @@ struct Retangulo {
 struct Estado {
     areas: Mutex<HashMap<String, Vec<Retangulo>>>,
     token: String,
-    ponte: Mutex<Option<Child>>,
+    ponte: Mutex<Option<CommandChild>>,
 }
 
 fn gerar_token() -> String {
@@ -377,54 +379,36 @@ fn iniciar_ponte(app: &AppHandle, token: &str, reinicio: bool) {
         return;
     };
     let recursos = sem_prefixo(pasta.join("recursos"));
-    let node = if cfg!(windows) {
-        recursos.join("node.exe")
-    } else {
-        recursos.join("node")
-    };
-    if !node.exists() {
-        registrar(format!("Node embutido não encontrado: {}", node.display()));
-        return;
-    }
     let script = recursos.join("ponte.mjs");
     if !script.exists() {
         registrar(format!("Script da ponte não encontrado: {}", script.display()));
         return;
     }
-    let saida_erro = dados.as_ref().and_then(|p| {
-        let caminho = sem_prefixo(p.join("ponte.log"));
-        if reinicio {
-            std::fs::OpenOptions::new().create(true).append(true).open(caminho).ok()
-        } else {
-            std::fs::File::create(caminho).ok()
+    let mut sidecar_comando = match app.shell().sidecar("node"){
+        Ok(cmd) => cmd,
+        Err(erro) => {
+            registrar(format!("Falha ao carregar o Sidecar do Node: {}", erro));
+            return;
         }
-    });
-    let mut comando = Command::new(&node);
-    comando.current_dir(&recursos).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null());
-    match saida_erro {
-        Some(arquivo) => {
-            comando.stderr(arquivo);
-        }
-        None => {
-            comando.stderr(std::process::Stdio::null());
-        }
-    }
-    comando.arg("ponte.mjs").env("NIKO_PORTA", PORTA.to_string()).env("NIKO_TOKEN", token).env("NIKO_PAI", std::process::id().to_string());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        comando.creation_flags(0x0800_0000);
-    }
+    };
+    sidecar_comando = sidecar_comando
+    .current_dir(recursos)
+    .arg("ponte.mjs")
+    .env("NIKO_PORTA", PORTA.to_string())
+    .env("NIKO_TOKEN", token)
+    .env("NIKO_PAI", std::process::id().to_string());
+
     let estado = app.state::<Estado>();
     let Ok(mut ponte) = estado.ponte.lock() else { return };
     if ENCERRANDO.load(Ordering::Relaxed) { return; }
-    if ponte.as_mut().is_some_and(|filho| !matches!(filho.try_wait(), Ok(Some(_)))) { return; }
-    match comando.spawn() {
-        Ok(filho) => {
-            registrar(format!("ponte iniciada: {} {} (pid {})", node.display(), script.display(), filho.id()));
+    if ponte.is_some() { return; }
+
+    match sidecar_comando.spawn() {
+        Ok((_rx, filho)) => {
+            registrar(format!("ponte sidecar iniciada com sucesso (pid {})", filho.pid()));
             *ponte = Some(filho);
         }
-        Err(erro) => registrar(format!("falha ao iniciar a ponte: {} {} {}", node.display(), script.display(), erro)),
+        Err(erro) => registrar(format!("falha ao dar spawn no Sidecar do Node: {}", erro)),
     }
 }
 
@@ -433,7 +417,6 @@ fn parar_ponte(app: &AppHandle) {
     let filho = app.state::<Estado>().ponte.lock().ok().and_then(|mut ponte| ponte.take());
     if let Some(mut filho) = filho {
         let _ = filho.kill();
-        let _ = filho.wait();
     }
 }
 
@@ -474,10 +457,13 @@ fn vigiar_ponte(app: AppHandle, token: String) {
                 return;
             }
             let caiu = match app.state::<Estado>().ponte.lock() {
-                Ok(mut ponte) => match ponte.as_mut() {
-                    Some(filho) => matches!(filho.try_wait(), Ok(Some(_))),
-                    None => true,
-                },
+                Ok(mut ponte) => {
+                    if let Some(ref mut filho) = *ponte {
+                        filho.pid() == 0
+                    } else {
+                        true
+                    }
+                }
                 Err(_) => false,
             };
             if !caiu {
@@ -489,6 +475,10 @@ fn vigiar_ponte(app: AppHandle, token: String) {
             if reinicios >= MAXIMO_REINICIOS_DA_PONTE {
                 return;
             }
+            if let Ok(mut ponte) = app.state::<Estado>().ponte.lock() {
+                *ponte = None;
+            }
+
             reinicios += 1;
             tokio::time::sleep(Duration::from_secs(u64::from(reinicios) * 2)).await;
             if ENCERRANDO.load(Ordering::Relaxed) {
@@ -520,6 +510,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--escondido"])))
+        .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, atalho, evento| {

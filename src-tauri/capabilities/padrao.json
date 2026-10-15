@@ -19,6 +19,14 @@
     "autostart:allow-is-enabled",
     "updater:default",
     "process:allow-restart",
-    "notification:default"
+    "notification:default",
+    {
+      "identifier": "shell:allow-execute",
+      "scope": [
+        {
+          "sidecar": "recursos/node"
+        }
+      ]
+    }
   ]
 }
